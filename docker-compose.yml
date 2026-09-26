@@ -1,0 +1,54 @@
+version: '3.9'
+
+services:
+  # ── Banco de Dados ──
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: robopod
+      POSTGRES_USER: robopod
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-robopod_secret}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U robopod"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Evolution API (WhatsApp) ──
+  evolution:
+    image: atendai/evolution-api:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY:-minha-chave-evolution}
+    volumes:
+      - evolution_data:/evolution/instances
+
+  # ── App Django (Bot) ──
+  app:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      evolution:
+        condition: service_started
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             uvicorn robopod.asgi:application --host 0.0.0.0 --port 8000 --reload"
+
+volumes:
+  pgdata:
+  evolution_data:
