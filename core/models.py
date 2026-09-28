@@ -52,12 +52,12 @@ class SessaoChat(models.Model):
         return f'{self.telefone} [{self.get_estado_atual_display()}]'
 
     def resetar_sessao(self):
-        """Reseta a sessão para o estado inicial (novo atendimento)."""
+        """Reseta a sessão para o estado inicial (novo atendimento).
+
+        Não salva: o chamador deve usar `save()`/`asave()` — um `save()`
+        síncrono aqui quebra (SynchronousOnlyOperation) dentro da view async.
+        """
         self.estado_atual = self.Estado.ATENDIMENTO_LLM
         self.carrinho_temporario = {}
         self.historico_mensagens = []
         self.ultima_interacao = timezone.now()
-        self.save(update_fields=[
-            'estado_atual', 'carrinho_temporario',
-            'historico_mensagens', 'ultima_interacao',
-        ])

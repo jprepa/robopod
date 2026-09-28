@@ -146,6 +146,15 @@ CHAVE_PIX=seu-email@pix.com
 | `EVOLUTION_API_KEY`   | Sim         | Chave de autenticação da Evolution API          |
 | `EVOLUTION_INSTANCE`  | Sim         | Nome da instância do WhatsApp                   |
 | `ENDERECO_LOJA`       | Sim         | Endereço completo da loja (origem do frete)     |
+| `FRETE_MODO`          | Não         | `estimativa` (padrão) ou `uber_scraper`         |
+| `GOOGLE_MAPS_API_KEY` | Não         | Chave c/ Routes API; vazio = OpenStreetMap      |
+| `FRETE_TAXA_BASE`     | Não         | Taxa fixa do frete em R$ (padrão: `6.00`)       |
+| `FRETE_VALOR_KM`      | Não         | R$ por km de rota (padrão: `1.50`)              |
+| `FRETE_VALOR_MINIMO`  | Não         | Frete mínimo em R$ (padrão: `9.00`)             |
+| `FRETE_MARGEM_PERCENTUAL` | Não     | % somado ao frete (padrão: `0`)                 |
+| `FRETE_DISTANCIA_MAXIMA_KM` | Não   | Acima disso vai p/ atendente (padrão: `20`)     |
+| `WHATSAPP_MENU_INTERATIVO` | Não    | `true` = cardápio em lista interativa           |
+| `CARDAPIO_IMAGEM_URL` | Não         | Imagem enviada antes do cardápio                |
 | `TEAMS_WEBHOOK_URL`   | Não         | URL do Incoming Webhook do Teams                |
 | `CHAVE_PIX`           | Sim         | Chave PIX para cobrança                         |
 | `POSTGRES_DB`         | Não         | Nome do banco (padrão: `robopod`)               |
@@ -453,12 +462,24 @@ curl -X POST http://localhost:8000/webhook/evolution/ \
 - Confirme que a chave não expirou em https://platform.openai.com/api-keys
 - Verifique saldo/créditos na conta
 
-### Frete não é cotado (scraper falha)
+### Frete não é cotado
 
-- A interface do Uber muda frequentemente — os seletores CSS podem quebrar
-- Ajuste os seletores em `core/scraper.py` conforme necessário
-- Para debug, rode com `headless=False` e observe o navegador
-- Considere implementar um fallback com valor de frete fixo
+- O `m.uber.com/go/delivery` **exige login**, por isso o scraper (`FRETE_MODO=uber_scraper`)
+  não funciona sem sessão. O padrão é `FRETE_MODO=estimativa` (`core/frete.py`):
+  `max(MINIMO, BASE + km × VALOR_KM) + MARGEM%`, arredondado para cima em R$ 0,50.
+- Calibre `FRETE_TAXA_BASE` / `FRETE_VALOR_KM` comparando com cotações reais do Uber Flash.
+- Sem `GOOGLE_MAPS_API_KEY` usa OpenStreetMap (grátis, pode não achar alguns endereços).
+  Com a chave (Routes API ativada) a precisão melhora bastante.
+- Endereço não encontrado ou acima de `FRETE_DISTANCIA_MAXIMA_KM` → cliente vai para
+  atendente humano e o motivo aparece no Teams.
+
+### Cardápio não aparece como lista
+
+- Com a Evolution em modo Baileys, listas/botões interativos frequentemente **não aparecem**
+  no celular (a API responde OK mesmo assim). Por isso o padrão é o cardápio em texto
+  (`WHATSAPP_MENU_INTERATIVO=false`). Para testar a lista, ative a variável e confira no celular.
+- O WhatsApp limita listas a 10 linhas e títulos de 24 caracteres; por isso a lista é
+  navegada em níveis: categoria → produto → sabor.
 
 ---
 

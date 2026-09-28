@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   # ── Banco de Dados ──
   db:
@@ -19,16 +17,43 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Redis (necessário para Evolution API v2) ──
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   # ── Evolution API (WhatsApp) ──
   evolution:
-    image: atendai/evolution-api:latest
+    image: evoapicloud/evolution-api:latest
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8083:8080"
     environment:
-      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY:-minha-chave-evolution}
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://robopod:${POSTGRES_PASSWORD:-robopod_secret}@db:5432/robopod?schema=evolution
+      DATABASE_CONNECTION_CLIENT_NAME: evolution_robopod
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "true"
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379
     volumes:
       - evolution_data:/evolution/instances
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   # ── App Django (Bot) ──
   app:
@@ -51,4 +76,5 @@ services:
 
 volumes:
   pgdata:
+  redis_data:
   evolution_data:

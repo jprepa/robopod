@@ -121,8 +121,8 @@ async def cotar_frete_uber(endereco_cliente: str) -> dict:
                         valor_moto = float(valor_str)
                         break
 
-            await browser.close()
-
+            # O navegador é encerrado ao sair do `async with async_playwright()`
+            # — não fechar aqui, pois o fallback abaixo ainda lê a página.
             if valor_moto is not None:
                 logger.info('Frete cotado: R$ %.2f', valor_moto)
                 return {
