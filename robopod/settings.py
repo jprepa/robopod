@@ -81,10 +81,17 @@ EVOLUTION_INSTANCE = os.getenv('EVOLUTION_INSTANCE', 'robopod')
 
 # ── Frete ──
 ENDERECO_LOJA = os.getenv('ENDERECO_LOJA', 'Rua Exemplo, 123 - Centro, São Paulo - SP')
-# 'estimativa' (distância x tabela) ou 'uber_scraper' (exige login na Uber)
+# 'lalamove' (API, cai na estimativa se falhar), 'estimativa' (distância x tabela)
+# ou 'uber_scraper' (exige login na Uber)
 FRETE_MODO = os.getenv('FRETE_MODO', 'estimativa').lower()
-# Opcional: com chave usa Google Routes API; sem chave usa OpenStreetMap
+# Opcional: "lat,lng" da loja; vazio = geocodifica ENDERECO_LOJA
+LOJA_COORDENADAS = os.getenv('LOJA_COORDENADAS', '')
+# Opcional: com chave usa Google Routes/Geocoding API; sem chave usa OpenStreetMap
 GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY', '')
+LALAMOVE_API_KEY = os.getenv('LALAMOVE_API_KEY', '')
+LALAMOVE_API_SECRET = os.getenv('LALAMOVE_API_SECRET', '')
+LALAMOVE_SANDBOX = os.getenv('LALAMOVE_SANDBOX', 'true').lower() in ('true', '1', 'yes')
+LALAMOVE_SERVICE_TYPE = os.getenv('LALAMOVE_SERVICE_TYPE', 'MOTORCYCLE')
 FRETE_TAXA_BASE = float(os.getenv('FRETE_TAXA_BASE', '6.00'))
 FRETE_VALOR_KM = float(os.getenv('FRETE_VALOR_KM', '1.50'))
 FRETE_VALOR_MINIMO = float(os.getenv('FRETE_VALOR_MINIMO', '9.00'))

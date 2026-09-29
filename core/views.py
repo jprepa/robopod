@@ -458,6 +458,7 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
         sessao.carrinho_temporario['frete'] = valor_frete
         sessao.carrinho_temporario['total'] = total
         sessao.carrinho_temporario['endereco'] = endereco
+        sessao.carrinho_temporario['frete_fornecedor'] = resultado_frete.get('fornecedor', '')
         sessao.ultima_interacao = timezone.now()
         await sessao.asave(update_fields=[
             'estado_atual', 'carrinho_temporario', 'ultima_interacao',
@@ -486,6 +487,7 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
             f'📍 Endereço: {endereco}\n'
             f'🛍️ Pedido:\n{resumo}\n'
             f'🛵 Frete: {formatar_preco(valor_frete)} ({resultado_frete["mensagem"]})\n'
+            f'🏷️ Cotado via: {resultado_frete.get("fornecedor", "?")}\n'
             f'💰 Total: {formatar_preco(total)}',
         )
 
