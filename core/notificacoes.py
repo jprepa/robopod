@@ -1,4 +1,4 @@
-"""Serviço de notificações externas (Evolution API e Microsoft Teams).
+"""Envio de mensagens pelo WhatsApp (Evolution API) e avisos à equipe num grupo.
 
 Todas as chamadas à Evolution API usam retry automático (até 3 tentativas
 com backoff exponencial) e timeout de 30 s para evitar que o bot fique mudo
@@ -11,6 +11,7 @@ import logging
 import httpx
 from django.conf import settings
 
+from painel.models import Configuracao
 from painel.servicos import registrar_mensagem_enviada
 
 logger = logging.getLogger(__name__)
@@ -227,30 +228,64 @@ async def enviar_botoes_whatsapp(
     return enviado
 
 
-async def notificar_teams(mensagem: str) -> bool:
-    """Envia notificação para o canal do Microsoft Teams via Incoming Webhook.
+async def notificar_equipe(
+    mensagem: str, telefone: str = '', mensagem_de_cliente: bool = False,
+) -> bool:
+    """Avisa a equipe no grupo do WhatsApp escolhido em Painel > Configurações.
 
     Args:
-        mensagem: Texto da notificação.
+        mensagem: Texto do aviso (aceita *negrito* do WhatsApp).
+        telefone: Cliente do aviso; com PAINEL_URL definido, vira um link
+            direto para a conversa no painel.
+        mensagem_de_cliente: True para o repasse de mensagens em atendimento
+            humano, que pode ser desligado separadamente.
 
     Returns:
-        True se o envio foi bem-sucedido.
+        True se o aviso foi enviado.
     """
-    webhook_url = settings.TEAMS_WEBHOOK_URL
-    if not webhook_url:
-        logger.warning('TEAMS_WEBHOOK_URL não configurada, notificação ignorada.')
+    config = await Configuracao.aobter()
+    if not (config.avisos_ativos and config.grupo_avisos_id):
+        logger.info('Grupo de avisos não configurado, aviso ignorado.')
+        return False
+    if mensagem_de_cliente and not config.avisar_mensagens_atendimento:
         return False
 
+    if telefone and settings.PAINEL_URL:
+        mensagem += f"\n🔗 {settings.PAINEL_URL.rstrip('/')}/painel/conversas/{telefone}/"
     try:
         await _post_com_retry(
-            webhook_url,
-            json={'text': mensagem},
-            headers={'Content-Type': 'application/json'},
-            timeout=10,
-            label='Teams webhook',
+            _evo_url('sendText'),
+            json={'number': config.grupo_avisos_id, 'text': mensagem},
+            headers=_evo_headers(),
+            label='Aviso no grupo da equipe',
         )
-        logger.info('Notificação Teams enviada')
+        logger.info('Aviso enviado ao grupo %s', config.grupo_avisos_nome or config.grupo_avisos_id)
         return True
     except Exception:
-        logger.exception('Falha ao notificar Teams')
+        logger.exception('Falha ao avisar o grupo da equipe')
         return False
+
+
+async def listar_grupos_whatsapp(timeout: float = 10) -> list[dict]:
+    """Grupos dos quais o WhatsApp da loja participa: [{'id', 'nome', 'participantes'}].
+
+    Raises:
+        httpx.HTTPError: se a Evolution não responder.
+    """
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.get(
+            f"{settings.EVOLUTION_API_URL}/group/fetchAllGroups/{settings.EVOLUTION_INSTANCE}",
+            params={'getParticipants': 'false'},
+            headers=_evo_headers(),
+        )
+        resp.raise_for_status()
+    grupos = [
+        {
+            'id': g.get('id', ''),
+            'nome': g.get('subject') or g.get('id', ''),
+            'participantes': g.get('size') or len(g.get('participants') or []),
+        }
+        for g in resp.json() or []
+        if str(g.get('id', '')).endswith('@g.us')
+    ]
+    return sorted(grupos, key=lambda g: g['nome'].lower())

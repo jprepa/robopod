@@ -161,6 +161,7 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
       <span class="badge" id="badge-pedidos" data-n="{{ contadores.pedidos_conferir }}" title="Comprovantes a conferir">{{ contadores.pedidos_conferir }}</span></a>
     <a href="{% url 'painel:clientes' %}" class="{% if secao == 'clientes' %}ativo{% endif %}">Clientes</a>
     <a href="{% url 'painel:estoque' %}" class="{% if secao == 'estoque' %}ativo{% endif %}">Estoque</a>
+    <a href="{% url 'painel:configuracoes' %}" class="{% if secao == 'configuracoes' %}ativo{% endif %}">Configurações</a>
   </nav>
   <div class="rodape">
     <div class="usuario">{{ user.get_username }}</div>

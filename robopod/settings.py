@@ -118,8 +118,11 @@ WHATSAPP_MENU_INTERATIVO = os.getenv('WHATSAPP_MENU_INTERATIVO', 'False').lower(
 # Opcional: URL pública de uma imagem/arte do cardápio, enviada antes do texto
 CARDAPIO_IMAGEM_URL = os.getenv('CARDAPIO_IMAGEM_URL', '')
 
-# ── Teams Webhook ──
-TEAMS_WEBHOOK_URL = os.getenv('TEAMS_WEBHOOK_URL', '')
+# ── Avisos à equipe ──
+# O grupo do WhatsApp que recebe os avisos é escolhido em Painel > Configurações.
+# Endereço público do painel (ex.: https://painel.seudominio.com.br); com ele os
+# avisos trazem um link direto para a conversa do cliente.
+PAINEL_URL = os.getenv('PAINEL_URL', '')
 
 # ── PIX ──
 CHAVE_PIX = os.getenv('CHAVE_PIX', '')

@@ -31,4 +31,6 @@ urlpatterns = [
     path('estoque/produto/novo/', views.produto_editar, name='produto_novo'),
     path('estoque/produto/<int:pk>/', views.produto_editar, name='produto_editar'),
     path('estoque/categorias/', views.categorias, name='categorias'),
+
+    path('configuracoes/', views.configuracoes, name='configuracoes'),
 ]

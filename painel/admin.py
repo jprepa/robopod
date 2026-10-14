@@ -1,6 +1,10 @@
 from django.contrib import admin
 
-from .models import Categoria, Cliente, ItemPedido, Mensagem, Pedido, Produto, Variante
+from .models import (
+    Categoria, Cliente, Configuracao, ItemPedido, Mensagem, Pedido, Produto, Variante,
+)
+
+admin.site.register(Configuracao)
 
 
 @admin.register(Cliente)

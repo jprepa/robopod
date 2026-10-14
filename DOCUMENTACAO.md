@@ -46,8 +46,8 @@ Evolution API (Webhook POST)
 │  pedido   humano               │
 │    │         │                 │
 │    ▼         ▼                 │
-│  Scraper   Teams               │
-│  (Uber)    Webhook             │
+│  Frete     Aviso no            │
+│  (moto)    grupo WhatsApp      │
 │    │                           │
 │    ▼                           │
 │  Cobrança PIX                  │
@@ -115,15 +115,18 @@ EVOLUTION_API_KEY=sua-chave-aqui
 EVOLUTION_INSTANCE=robopod
 ```
 
-### 3.4. Microsoft Teams Webhook
+### 3.4. Grupo de avisos no WhatsApp
 
-1. No Teams, vá no canal desejado → **Conectores** → **Incoming Webhook**
-2. Nomeie como "Robopod Alertas" e copie a URL
-3. Cole no `.env`:
+O bot avisa a equipe num grupo do WhatsApp: cliente pediu atendente, pedido novo,
+comprovante recebido e falha no frete.
 
-```env
-TEAMS_WEBHOOK_URL=https://outlook.office.com/webhook/...
-```
+1. Crie um grupo no WhatsApp com a equipe e **adicione o número da loja** (o do bot).
+2. No painel, abra **Configurações**, escolha o grupo na lista e clique em **Salvar**.
+3. Clique em **Enviar mensagem de teste** para confirmar.
+4. Opcional: preencha `PAINEL_URL` no `.env` para os avisos virem com link da conversa.
+
+Mensagens enviadas dentro de grupos são ignoradas pelo bot, então a equipe pode
+conversar no grupo à vontade.
 
 ### 3.5. Chave PIX
 
@@ -157,7 +160,7 @@ CHAVE_PIX=seu-email@pix.com
 | `LOJA_COORDENADAS`    | Não         | `lat,lng` fixos da loja (recomendado)           |
 | `WHATSAPP_MENU_INTERATIVO` | Não    | `true` = cardápio em lista interativa           |
 | `CARDAPIO_IMAGEM_URL` | Não         | Imagem enviada antes do cardápio                |
-| `TEAMS_WEBHOOK_URL`   | Não         | URL do Incoming Webhook do Teams                |
+| `PAINEL_URL`          | Não         | Endereço público do painel (link nos avisos)    |
 | `CHAVE_PIX`           | Sim         | Chave PIX para cobrança                         |
 | `CSRF_TRUSTED_ORIGINS` | Não        | URL(s) do painel com https, separadas por vírgula |
 | `PAINEL_VIRADA_DIA_HORA` | Não      | Hora em que vira o dia nos relatórios (padrão: `6`) |
@@ -377,7 +380,7 @@ robopod/
     ├── llm_service.py        # Integração OpenAI com guardrails
     ├── scraper.py            # Cotação de frete via Playwright
     ├── frete.py              # Cotação de frete (Lalamove / estimativa)
-    └── notificacoes.py       # WhatsApp (Evolution) e Teams; registra mensagens enviadas
+    └── notificacoes.py       # WhatsApp (Evolution) e avisos no grupo da equipe
 │
 └── painel/                   # Painel da loja (/painel/)
     ├── models.py             # Cliente, Categoria, Produto, Variante, Pedido, ItemPedido, Mensagem
@@ -507,7 +510,7 @@ curl -X POST http://localhost:8000/webhook/evolution/ \
   Chamadas aos mapas têm novas tentativas em timeout/429/5xx.
 - O cliente vê "Localizado como: ..." no resumo para conferir o endereço entendido.
 - Endereço não encontrado → o bot pede o endereço de novo (1 vez) e depois chama atendente.
-- Acima de `FRETE_DISTANCIA_MAXIMA_KM` → atendente humano; o Teams mostra o motivo e
+- Acima de `FRETE_DISTANCIA_MAXIMA_KM` → atendente humano; o grupo de avisos mostra o motivo e
   como o endereço foi interpretado no mapa.
 - Fixe `LOJA_COORDENADAS` no `.env` para a origem nunca depender da geocodificação.
 

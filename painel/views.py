@@ -20,11 +20,13 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from core.models import SessaoChat
-from core.notificacoes import enviar_whatsapp
+from core.notificacoes import enviar_whatsapp, listar_grupos_whatsapp, notificar_equipe
 
 from . import servicos
 from .forms import CategoriaForm, ClienteForm, ProdutoForm, VarianteFormSet
-from .models import Categoria, Cliente, ItemPedido, Mensagem, Pedido, Produto, Variante
+from .models import (
+    Categoria, Cliente, Configuracao, ItemPedido, Mensagem, Pedido, Produto, Variante,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -539,6 +541,47 @@ def produto_editar(request, pk: int | None = None):
     return _render(request, 'painel/produto_form.html', {
         'secao': 'estoque', 'form': form, 'formset': formset, 'produto': obj,
         'sem_categoria': not Categoria.objects.exists(),
+    })
+
+
+@login_required
+def configuracoes(request):
+    config = Configuracao.obter()
+    if request.method == 'POST':
+        if 'testar' in request.POST:
+            ok = async_to_sync(notificar_equipe)(
+                '✅ *Teste do Robopod*\nOs avisos da loja vão chegar neste grupo.',
+            )
+            if ok:
+                messages.success(request, 'Mensagem de teste enviada ao grupo.')
+            else:
+                messages.error(request, 'Não foi possível enviar: confira o grupo escolhido e a conexão da Evolution.')
+            return redirect('painel:configuracoes')
+
+        grupo = request.POST.get('grupo', '')
+        manual = request.POST.get('grupo_manual', '').strip()
+        if manual:
+            config.grupo_avisos_id, config.grupo_avisos_nome = manual, manual
+        elif grupo:
+            config.grupo_avisos_id, _, config.grupo_avisos_nome = grupo.partition('||')
+        else:
+            config.grupo_avisos_id = config.grupo_avisos_nome = ''
+        config.avisos_ativos = bool(request.POST.get('avisos_ativos'))
+        config.avisar_mensagens_atendimento = bool(request.POST.get('avisar_mensagens_atendimento'))
+        config.save()
+        messages.success(request, 'Configurações salvas.')
+        return redirect('painel:configuracoes')
+
+    grupos, erro_grupos = [], ''
+    try:
+        grupos = async_to_sync(listar_grupos_whatsapp)()
+    except Exception as e:
+        logger.warning('Não foi possível listar os grupos do WhatsApp: %s', e)
+        erro_grupos = 'Não foi possível buscar os grupos na Evolution. Confira se o WhatsApp está conectado.'
+    return _render(request, 'painel/configuracoes.html', {
+        'secao': 'configuracoes', 'config': config, 'grupos': grupos, 'erro_grupos': erro_grupos,
+        'grupo_na_lista': any(g['id'] == config.grupo_avisos_id for g in grupos),
+        'painel_url': settings.PAINEL_URL,
     })
 
 

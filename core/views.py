@@ -23,7 +23,7 @@ from .llm_service import (
     buscar_item, buscar_categoria, item_tem_variantes, formatar_preco,
 )
 from .notificacoes import (
-    enviar_whatsapp, notificar_teams,
+    enviar_whatsapp, notificar_equipe,
     enviar_lista_whatsapp, enviar_imagem_whatsapp,
 )
 from painel import catalogo, servicos
@@ -176,7 +176,7 @@ async def _enviar_cardapio(telefone: str) -> None:
 
 
 async def _transferir_para_humano(sessao: SessaoChat, motivo: str) -> None:
-    """Coloca a sessão em atendimento humano, avisa o cliente e o Teams."""
+    """Coloca a sessão em atendimento humano, avisa o cliente e a equipe."""
     sessao.estado_atual = SessaoChat.Estado.ATENDIMENTO_HUMANO
     sessao.ultima_interacao = timezone.now()
     await sessao.asave(update_fields=['estado_atual', 'ultima_interacao'])
@@ -185,11 +185,12 @@ async def _transferir_para_humano(sessao: SessaoChat, motivo: str) -> None:
         '🔄 Transferindo para um atendente humano... '
         'Aguarde um momento, por favor!',
     )
-    await notificar_teams(
+    await notificar_equipe(
         f'🚨 *Transferência para humano*\n'
         f'📱 Cliente: {sessao.telefone}\n'
         f'📝 Motivo: {motivo}\n'
         f'🕐 {timezone.localtime().strftime("%d/%m/%Y %H:%M")}',
+        telefone=sessao.telefone,
     )
 
 
@@ -478,13 +479,14 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
                 )
             await enviar_whatsapp(telefone, aviso)
             resumo, subtotal = _resumo_itens(sessao.carrinho_temporario.get('itens', []))
-            await notificar_teams(
+            await notificar_equipe(
                 f'⚠️ *Falha na cotação de frete*\n'
                 f'📱 Cliente: {telefone}\n'
                 f'📍 Endereço: {endereco}\n'
                 f'🛍️ Pedido:\n{resumo}\n'
                 f'💰 Subtotal: {formatar_preco(subtotal)}\n'
                 f'❌ Motivo: {resultado_frete["mensagem"]}',
+                telefone=telefone,
             )
             return
 
@@ -533,8 +535,8 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
 
         await enviar_whatsapp(telefone, mensagem_cobranca)
 
-        # Notifica equipe no Teams
-        await notificar_teams(
+        # Notifica a equipe no grupo do WhatsApp
+        await notificar_equipe(
             f'🛒 *Novo pedido{numero_pedido} aguardando pagamento*\n'
             f'📱 Cliente: {telefone}\n'
             f'📍 Endereço: {endereco}\n'
@@ -543,6 +545,7 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
             f'🛵 Frete: {formatar_preco(valor_frete)} ({resultado_frete["mensagem"]})\n'
             f'🏷️ Cotado via: {resultado_frete.get("fornecedor", "?")}\n'
             f'💰 Total: {formatar_preco(total)}',
+            telefone=telefone,
         )
 
     except Exception:
@@ -556,11 +559,12 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
                 telefone,
                 '😕 Ocorreu um erro ao calcular o frete. Um atendente irá ajudá-lo em breve!',
             )
-            await notificar_teams(
+            await notificar_equipe(
                 f'⚠️ *Erro na cotação de frete*\n'
                 f'📱 Cliente: {telefone}\n'
                 f'📍 Endereço: {endereco}\n'
                 f'Veja os logs do app.',
+                telefone=telefone,
             )
         except Exception:
             logger.exception('Falha ao tratar erro da task de frete')
@@ -585,11 +589,12 @@ async def _handler_aguardando_comprovante(
             'despachamos seu pedido. 🛵',
         )
         total = sessao.carrinho_temporario.get('total')
-        await notificar_teams(
+        await notificar_equipe(
             f'💸 *Comprovante recebido — conferir pagamento e chamar a entrega*\n'
             f'📱 Cliente: {sessao.telefone}\n'
             f'📍 Endereço: {sessao.carrinho_temporario.get("endereco", "?")}\n'
             f'💰 Total: {formatar_preco(total) if total is not None else "?"}',
+            telefone=sessao.telefone,
         )
         return
 
@@ -613,7 +618,7 @@ async def _handler_atendimento_humano(
 
     Permite que o cliente volte ao atendimento automático digitando
     'voltar', 'menu' ou 'reiniciar'. Caso contrário, avisa que está
-    com um humano e repassa ao Teams.
+    com um humano e repassa ao grupo da equipe.
     """
     comando = _normalizar(texto)
 
@@ -628,10 +633,12 @@ async def _handler_atendimento_humano(
         await _enviar_cardapio(sessao.telefone)
         return
 
-    # Repassa ao Teams (se configurado)
-    await notificar_teams(
+    # Repassa ao grupo da equipe (se configurado)
+    await notificar_equipe(
         f'💬 *Mensagem do cliente (atendimento humano)*\n'
         f'📱 {sessao.telefone}: {texto}',
+        telefone=sessao.telefone,
+        mensagem_de_cliente=True,
     )
 
     # Avisa o cliente que está com um humano — no máximo a cada 15 min e

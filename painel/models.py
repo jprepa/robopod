@@ -173,6 +173,37 @@ class ItemPedido(models.Model):
         return self.preco_unitario * self.quantidade
 
 
+class Configuracao(models.Model):
+    """Configurações da loja editadas no painel (registro único, pk=1)."""
+
+    grupo_avisos_id = models.CharField(
+        max_length=80, blank=True, help_text='ID do grupo do WhatsApp (termina em @g.us)',
+    )
+    grupo_avisos_nome = models.CharField(max_length=120, blank=True)
+    avisos_ativos = models.BooleanField(default=True)
+    avisar_mensagens_atendimento = models.BooleanField(
+        default=True,
+        help_text='Repassa ao grupo as mensagens de clientes em atendimento humano',
+    )
+
+    class Meta:
+        verbose_name = 'Configuração'
+        verbose_name_plural = 'Configurações'
+
+    def __str__(self):
+        return 'Configurações da loja'
+
+    @classmethod
+    def obter(cls) -> 'Configuracao':
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    @classmethod
+    async def aobter(cls) -> 'Configuracao':
+        obj, _ = await cls.objects.aget_or_create(pk=1)
+        return obj
+
+
 class Mensagem(models.Model):
     """Mensagem trocada no WhatsApp (para o histórico das conversas)."""
 

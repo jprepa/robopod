@@ -151,8 +151,8 @@ EVOLUTION_INSTANCE=robopod
 ENDERECO_LOJA=Rua da Sua Loja, 123 - Bairro, Cidade - UF
 PLAYWRIGHT_HEADLESS=true
 
-# ── Teams (deixe vazio se não usar) ──
-TEAMS_WEBHOOK_URL=
+# ── Painel (opcional: endereço público, para os avisos virem com link) ──
+PAINEL_URL=
 
 # ── PIX ──
 CHAVE_PIX=sua-chave-pix
