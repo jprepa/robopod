@@ -97,6 +97,8 @@ FRETE_VALOR_KM = float(os.getenv('FRETE_VALOR_KM', '1.50'))
 FRETE_VALOR_MINIMO = float(os.getenv('FRETE_VALOR_MINIMO', '9.00'))
 FRETE_MARGEM_PERCENTUAL = float(os.getenv('FRETE_MARGEM_PERCENTUAL', '0'))
 FRETE_DISTANCIA_MAXIMA_KM = float(os.getenv('FRETE_DISTANCIA_MAXIMA_KM', '20'))
+# Cidade anexada a endereços sem cidade ("Rio de Janeiro - RJ"); vazio = fim de ENDERECO_LOJA
+FRETE_CIDADE_PADRAO = os.getenv('FRETE_CIDADE_PADRAO', '')
 
 # ── Cardápio no WhatsApp ──
 # Listas/botões interativos muitas vezes NÃO aparecem com a Evolution em modo

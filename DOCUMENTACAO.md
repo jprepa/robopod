@@ -153,6 +153,8 @@ CHAVE_PIX=seu-email@pix.com
 | `FRETE_VALOR_MINIMO`  | Não         | Frete mínimo em R$ (padrão: `9.00`)             |
 | `FRETE_MARGEM_PERCENTUAL` | Não     | % somado ao frete (padrão: `0`)                 |
 | `FRETE_DISTANCIA_MAXIMA_KM` | Não   | Acima disso vai p/ atendente (padrão: `20`)     |
+| `FRETE_CIDADE_PADRAO` | Não       | Cidade anexada se o cliente não informar (padrão: fim do `ENDERECO_LOJA`) |
+| `LOJA_COORDENADAS`    | Não         | `lat,lng` fixos da loja (recomendado)           |
 | `WHATSAPP_MENU_INTERATIVO` | Não    | `true` = cardápio em lista interativa           |
 | `CARDAPIO_IMAGEM_URL` | Não         | Imagem enviada antes do cardápio                |
 | `TEAMS_WEBHOOK_URL`   | Não         | URL do Incoming Webhook do Teams                |
@@ -470,8 +472,15 @@ curl -X POST http://localhost:8000/webhook/evolution/ \
 - Calibre `FRETE_TAXA_BASE` / `FRETE_VALOR_KM` comparando com cotações reais do Uber Flash.
 - Sem `GOOGLE_MAPS_API_KEY` usa OpenStreetMap (grátis, pode não achar alguns endereços).
   Com a chave (Routes API ativada) a precisão melhora bastante.
-- Endereço não encontrado ou acima de `FRETE_DISTANCIA_MAXIMA_KM` → cliente vai para
-  atendente humano e o motivo aparece no Teams.
+- O endereço do cliente é localizado uma vez, priorizando a região da loja; se ele não
+  citar a cidade, o bot tenta também com `FRETE_CIDADE_PADRAO` anexada. As mesmas
+  coordenadas são usadas pela Lalamove e pela estimativa, e o resultado fica em cache.
+  Chamadas aos mapas têm novas tentativas em timeout/429/5xx.
+- O cliente vê "Localizado como: ..." no resumo para conferir o endereço entendido.
+- Endereço não encontrado → o bot pede o endereço de novo (1 vez) e depois chama atendente.
+- Acima de `FRETE_DISTANCIA_MAXIMA_KM` → atendente humano; o Teams mostra o motivo e
+  como o endereço foi interpretado no mapa.
+- Fixe `LOJA_COORDENADAS` no `.env` para a origem nunca depender da geocodificação.
 
 ### Cardápio não aparece como lista
 

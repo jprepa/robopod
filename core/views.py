@@ -26,6 +26,7 @@ from .notificacoes import (
     enviar_whatsapp, notificar_teams,
     enviar_lista_whatsapp, enviar_imagem_whatsapp,
 )
+from . import frete
 from .frete import cotar_frete
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,9 @@ logger = logging.getLogger(__name__)
 # Referências às tasks de background — sem isso o asyncio pode descartar
 # a task (garbage collection) antes de ela terminar.
 _tasks_background: set[asyncio.Task] = set()
+
+# Endereços não encontrados no mapa antes de passar para atendente
+_MAX_TENTATIVAS_ENDERECO = 2
 
 # Palavras de saudação pura: se a primeira mensagem só tiver essas palavras,
 # respondemos apenas com boas-vindas + cardápio; senão ela também vai para a IA.
@@ -427,15 +431,38 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
             return
 
         if not resultado_frete['sucesso']:
+            motivo = resultado_frete.get('motivo')
+            tentativas = sessao.carrinho_temporario.get('tentativas_endereco', 0) + 1
+            sessao.carrinho_temporario['tentativas_endereco'] = tentativas
+            sessao.carrinho_temporario['endereco'] = endereco
+
+            # Endereço não achado no mapa: pede de novo antes de chamar humano
+            if motivo == frete.NAO_ENCONTRADO and tentativas < _MAX_TENTATIVAS_ENDERECO:
+                sessao.estado_atual = SessaoChat.Estado.AGUARDANDO_ENDERECO
+                await sessao.asave(update_fields=['estado_atual', 'carrinho_temporario'])
+                await enviar_whatsapp(
+                    telefone,
+                    '📍 Não encontrei esse endereço no mapa. Pode enviar de novo com '
+                    '*rua, número, bairro e cidade*?\n'
+                    '_Ex.: Rua das Flores, 120, Centro, Rio de Janeiro_\n\n'
+                    'Se preferir, digite *atendente*.',
+                )
+                return
+
             # Frete falhou — escala para humano
             sessao.estado_atual = SessaoChat.Estado.ATENDIMENTO_HUMANO
-            sessao.carrinho_temporario['endereco'] = endereco
             await sessao.asave(update_fields=['estado_atual', 'carrinho_temporario'])
-            await enviar_whatsapp(
-                telefone,
-                '😕 Não consegui calcular o frete automaticamente para esse endereço. '
-                'Um atendente vai te ajudar em instantes!',
-            )
+            if motivo == frete.FORA_AREA:
+                aviso = (
+                    '📍 Esse endereço fica fora da nossa área de entrega automática. '
+                    'Um atendente vai verificar se conseguimos te atender!'
+                )
+            else:
+                aviso = (
+                    '😕 Não consegui calcular o frete automaticamente para esse endereço. '
+                    'Um atendente vai te ajudar em instantes!'
+                )
+            await enviar_whatsapp(telefone, aviso)
             resumo, subtotal = _resumo_itens(sessao.carrinho_temporario.get('itens', []))
             await notificar_teams(
                 f'⚠️ *Falha na cotação de frete*\n'
@@ -459,10 +486,16 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
         sessao.carrinho_temporario['total'] = total
         sessao.carrinho_temporario['endereco'] = endereco
         sessao.carrinho_temporario['frete_fornecedor'] = resultado_frete.get('fornecedor', '')
+        sessao.carrinho_temporario['endereco_mapa'] = resultado_frete.get('endereco_formatado', '')
+        sessao.carrinho_temporario.pop('tentativas_endereco', None)
         sessao.ultima_interacao = timezone.now()
         await sessao.asave(update_fields=[
             'estado_atual', 'carrinho_temporario', 'ultima_interacao',
         ])
+
+        # Mostra como o endereço foi entendido no mapa para o cliente conferir
+        endereco_mapa = resultado_frete.get('endereco_formatado')
+        mapa = f"🗺️ _Localizado como: {endereco_mapa}_\n" if endereco_mapa else ''
 
         mensagem_cobranca = (
             f"🧾 *Resumo do Pedido*\n\n"
@@ -470,7 +503,8 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
             f"🛍️ Subtotal: {formatar_preco(subtotal)}\n"
             f"🛵 Frete ({resultado_frete['mensagem']}): {formatar_preco(valor_frete)}\n"
             f"💰 *TOTAL: {formatar_preco(total)}*\n\n"
-            f"📍 Entrega em: {endereco}\n\n"
+            f"📍 Entrega em: {endereco}\n"
+            f"{mapa}\n"
             f"────────────────────\n"
             f"💳 *Pagamento via PIX*\n\n"
             f"Chave PIX: `{settings.CHAVE_PIX}`\n\n"
@@ -485,6 +519,7 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
             f'🛒 *Novo pedido aguardando pagamento*\n'
             f'📱 Cliente: {telefone}\n'
             f'📍 Endereço: {endereco}\n'
+            f'🗺️ No mapa: {endereco_mapa or "?"}\n'
             f'🛍️ Pedido:\n{resumo}\n'
             f'🛵 Frete: {formatar_preco(valor_frete)} ({resultado_frete["mensagem"]})\n'
             f'🏷️ Cotado via: {resultado_frete.get("fornecedor", "?")}\n'
