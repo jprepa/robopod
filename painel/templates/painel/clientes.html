@@ -1,0 +1,44 @@
+{% extends 'painel/base.html' %}
+{% load painel_tags %}
+{% block titulo %}Clientes{% endblock %}
+{% block conteudo %}
+<div class="topo"><h1>Clientes <span class="muted" style="font-size:15px;font-weight:500">{{ total_clientes }}</span></h1></div>
+<form class="filtros" method="get">
+  <input type="search" name="q" value="{{ busca }}" placeholder="Buscar por nome ou número">
+  <select name="ordem" onchange="this.form.submit()" style="width:auto">
+    <option value="recentes" {% if ordem == 'recentes' %}selected{% endif %}>Mais recentes</option>
+    <option value="gasto" {% if ordem == 'gasto' %}selected{% endif %}>Quem mais gastou</option>
+    <option value="pedidos" {% if ordem == 'pedidos' %}selected{% endif %}>Mais pedidos</option>
+    <option value="nome" {% if ordem == 'nome' %}selected{% endif %}>Nome</option>
+  </select>
+  <label class="chip" style="cursor:pointer"><input type="checkbox" name="bloqueados" value="1" {% if request.GET.bloqueados %}checked{% endif %} onchange="this.form.submit()"> Só bloqueados</label>
+  <button class="btn" type="submit">Buscar</button>
+</form>
+<div class="cartao tabela-wrap" style="padding:0">
+  <table>
+    <thead><tr><th>Cliente</th><th>Número</th><th class="num">Pedidos</th><th class="num">Total gasto</th><th>Último pedido</th><th>Última mensagem</th><th></th></tr></thead>
+    <tbody>
+    {% for c in pagina %}
+      <tr>
+        <td><a href="{% url 'painel:cliente' c.pk %}">{{ c.nome_exibicao }}</a>{% if c.bloqueado %} <span class="tag cancelado">bloqueado</span>{% endif %}</td>
+        <td>{{ c.telefone|telefone }}</td>
+        <td class="num">{{ c.num_pedidos }}</td>
+        <td class="num">{{ c.total_gasto|brl }}</td>
+        <td>{{ c.ultimo_pedido|date:"d/m/Y"|default:"—" }}</td>
+        <td>{{ c.ultima_mensagem_em|date:"d/m H:i"|default:"—" }}</td>
+        <td class="num"><a class="btn peq" href="{% url 'painel:conversa' c.telefone %}">Conversa</a></td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="7" class="vazio">Nenhum cliente encontrado.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if pagina.paginator.num_pages > 1 %}
+<div class="paginacao">
+  {% if pagina.has_previous %}<a class="btn peq" href="{% url_com pagina=pagina.previous_page_number %}">← Anterior</a>{% endif %}
+  <span class="muted">Página {{ pagina.number }} de {{ pagina.paginator.num_pages }}</span>
+  {% if pagina.has_next %}<a class="btn peq" href="{% url_com pagina=pagina.next_page_number %}">Próxima →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

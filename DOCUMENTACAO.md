@@ -159,6 +159,8 @@ CHAVE_PIX=seu-email@pix.com
 | `CARDAPIO_IMAGEM_URL` | Não         | Imagem enviada antes do cardápio                |
 | `TEAMS_WEBHOOK_URL`   | Não         | URL do Incoming Webhook do Teams                |
 | `CHAVE_PIX`           | Sim         | Chave PIX para cobrança                         |
+| `CSRF_TRUSTED_ORIGINS` | Não        | URL(s) do painel com https, separadas por vírgula |
+| `PAINEL_VIRADA_DIA_HORA` | Não      | Hora em que vira o dia nos relatórios (padrão: `6`) |
 | `POSTGRES_DB`         | Não         | Nome do banco (padrão: `robopod`)               |
 | `POSTGRES_USER`       | Não         | Usuário do banco (padrão: `robopod`)            |
 | `POSTGRES_PASSWORD`   | Não         | Senha do banco (padrão: `robopod_secret`)       |
@@ -374,7 +376,16 @@ robopod/
     ├── views.py              # Webhook + roteamento + background tasks
     ├── llm_service.py        # Integração OpenAI com guardrails
     ├── scraper.py            # Cotação de frete via Playwright
-    └── notificacoes.py       # WhatsApp (Evolution) e Teams
+    ├── frete.py              # Cotação de frete (Lalamove / estimativa)
+    └── notificacoes.py       # WhatsApp (Evolution) e Teams; registra mensagens enviadas
+│
+└── painel/                   # Painel da loja (/painel/)
+    ├── models.py             # Cliente, Categoria, Produto, Variante, Pedido, ItemPedido, Mensagem
+    ├── catalogo.py           # Cardápio do banco p/ o bot (cache + validação do carrinho)
+    ├── servicos.py           # Clientes, histórico, pedidos e estoque
+    ├── views.py / urls.py    # Telas do painel
+    ├── catalogo_inicial.py   # Cardápio gravado na 1ª migração
+    └── templates/painel/     # HTML (Django + HTMX + Chart.js via CDN)
 ```
 
 ---
@@ -412,6 +423,24 @@ Content-Type: application/json
 - URL: `http://localhost:8000/admin/`
 - Visualize e gerencie sessões de chat
 - Filtre por estado, busque por telefone
+
+### Painel da loja
+
+- URL: `http://localhost:8000/painel/` (a raiz `/` redireciona para ele)
+- Login com o mesmo usuário do admin (`python manage.py createsuperuser`)
+- Acesso por domínio/HTTPS: preencha `CSRF_TRUSTED_ORIGINS` no `.env`
+  (ex.: `https://painel.seudominio.com.br`), senão o login dá erro 403.
+
+| Seção | O que faz |
+|-------|-----------|
+| **Dashboard** | Faturamento de hoje e do período (7/30/90 dias) com variação, gráfico de faturamento por dia, mais vendidos, estoque baixo e alertas (conversas aguardando atendente, comprovantes a conferir). Conta só pedidos pagos/em entrega/entregues. O "dia" vira às `PAINEL_VIRADA_DIA_HORA` (padrão 6h), então a venda da 01h entra na noite anterior. |
+| **Conversas** | Caixa de entrada atualizada a cada 10 s, com filtros (aguardando atendente, não lidas, com pedido aberto) e busca por nome/número. Dentro da conversa, as mensagens novas aparecem sozinhas e dá para responder pelo painel (sai pelo WhatsApp da loja), usar respostas rápidas, **assumir** a conversa (o bot para de responder) ou **devolver ao bot**. |
+| **Clientes** | Cadastro por número, criado automaticamente na primeira mensagem (com o nome do perfil do WhatsApp). Mostra total gasto, nº de pedidos, último pedido e o que mais pede. Dá para editar nome/observações e **bloquear** o número (o bot passa a ignorá-lo). |
+| **Pedidos** | Criados automaticamente quando o frete é cotado. Status: aguardando pagamento → comprovante recebido → pago → saiu para entrega → entregue (ou cancelado). Cada mudança pode avisar o cliente no WhatsApp; cancelar devolve o estoque; entregue/cancelado devolve a conversa ao bot. |
+| **Estoque** | Cardápio do bot: categorias, produtos, preços, sabores/opções e estoque, com ajuste rápido (+/−, preço, ocultar). Vale na hora para o bot. Estoque vazio = não controla; zerado ou oculto some do cardápio. O pedido reserva o estoque ao ser criado. |
+
+O bot agora usa o **preço do banco** (não o que a IA escreveu) e confere o estoque
+ao fechar o pedido. Se faltar algo, avisa o cliente e pede para ajustar.
 
 ---
 

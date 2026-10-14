@@ -1,0 +1,45 @@
+{% extends 'painel/base.html' %}
+{% block titulo %}Estoque{% endblock %}
+{% block estilo %}
+.controle-estoque { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.in-estoque { width: 72px !important; text-align: center; font-variant-numeric: tabular-nums; }
+.in-estoque.baixo { border-color: var(--warn); }
+.in-estoque.zerado { border-color: var(--bad); }
+.in-preco { width: 92px !important; font-variant-numeric: tabular-nums; }
+tbody.inativo .linha-produto td:first-child, tr.inativo td:first-child { opacity: .55; }
+.recuo { padding-left: 28px; color: var(--text-2); }
+.linha-variante td { border-bottom-style: dashed; }
+.categoria-titulo { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.categoria-titulo h2 { margin: 0; }
+tbody + tbody { border-top: 1px solid var(--border); }
+{% endblock %}
+{% block conteudo %}
+<div class="topo">
+  <h1>Estoque e cardápio</h1>
+  <div style="display:flex;gap:8px">
+    <a class="btn" href="{% url 'painel:categorias' %}">Categorias</a>
+    <a class="btn primario" href="{% url 'painel:produto_novo' %}">+ Novo produto</a>
+  </div>
+</div>
+<form class="filtros" method="get">
+  <input type="search" name="q" value="{{ busca }}" placeholder="Buscar produto ou sabor">
+  <label class="chip" style="cursor:pointer"><input type="checkbox" name="baixo" value="1" {% if baixo %}checked{% endif %} onchange="this.form.submit()"> Só estoque baixo</label>
+  <button class="btn" type="submit">Buscar</button>
+  <span class="muted peq">Alterações valem para o bot na hora. Itens ocultos ou com estoque zerado somem do cardápio.</span>
+</form>
+
+{% for categoria, produtos in grupos %}
+<section class="cartao tabela-wrap" style="padding:0;margin-bottom:16px">
+  <div class="categoria-titulo">
+    <h2>{{ categoria.titulo }}{% if not categoria.ativo %} <span class="tag cancelado">categoria oculta</span>{% endif %}</h2>
+    <span class="muted peq">{{ produtos|length }} produto{{ produtos|length|pluralize }}</span>
+  </div>
+  <table>
+    <thead><tr><th>Produto</th><th>Preço (R$)</th><th>Estoque</th><th>Cardápio</th><th></th></tr></thead>
+    {% for p in produtos %}{% include 'painel/parciais/estoque_produto.html' %}{% endfor %}
+  </table>
+</section>
+{% empty %}
+<div class="cartao vazio">Nenhum produto encontrado. <a href="{% url 'painel:produto_novo' %}">Cadastrar produto</a></div>
+{% endfor %}
+{% endblock %}

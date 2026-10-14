@@ -1,0 +1,49 @@
+{% extends 'painel/base.html' %}
+{% block titulo %}Categorias{% endblock %}
+{% block conteudo %}
+<div class="topo">
+  <h1>Categorias</h1>
+  <a class="btn" href="{% url 'painel:estoque' %}">← Estoque</a>
+</div>
+<div class="grade g-3-1">
+  <section class="cartao tabela-wrap" style="padding:0">
+    <table>
+      <thead><tr><th>Categoria</th><th class="num">Ordem</th><th class="num">Produtos</th><th>Cardápio</th><th></th></tr></thead>
+      <tbody>
+      {% for c in categorias %}
+        <tr>
+          <td>{{ c.titulo }}</td>
+          <td class="num">{{ c.ordem }}</td>
+          <td class="num">{{ c.num_produtos }}</td>
+          <td>{% if c.ativo %}<span class="tag pago">visível</span>{% else %}<span class="tag cancelado">oculta</span>{% endif %}</td>
+          <td class="num">
+            <a class="btn peq" href="?editar={{ c.pk }}">Editar</a>
+            {% if not c.num_produtos %}
+            <form method="post" style="display:inline">{% csrf_token %}
+              <button class="btn peq perigo" name="excluir" value="{{ c.pk }}" onclick="return confirm('Excluir a categoria?')">Excluir</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="vazio">Nenhuma categoria.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <section class="cartao">
+    <h2>{% if editando %}Editar {{ editando.titulo }}{% else %}Nova categoria{% endif %}</h2>
+    <form method="post" class="grade" style="gap:12px">
+      {% csrf_token %}
+      <div class="campo"><label for="id_emoji">Emoji</label>{{ form.emoji }}<div class="ajuda">Aparece no cardápio do WhatsApp. Ex.: 🔥</div></div>
+      <div class="campo"><label for="id_nome">Nome</label>{{ form.nome }}{% for e in form.nome.errors %}<div class="erro">{{ e }}</div>{% endfor %}</div>
+      <div class="campo"><label for="id_ordem">Ordem no cardápio</label>{{ form.ordem }}</div>
+      <div class="campo"><label>{{ form.ativo }} Mostrar no cardápio</label></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn primario" type="submit">Salvar</button>
+        {% if editando %}<a class="btn" href="{% url 'painel:categorias' %}">Cancelar</a>{% endif %}
+      </div>
+    </form>
+  </section>
+</div>
+{% endblock %}

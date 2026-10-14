@@ -1,0 +1,182 @@
+{% extends 'painel/base.html' %}
+{% load painel_tags %}
+{% block titulo %}Dashboard{% endblock %}
+{% block estilo %}
+.grafico { position: relative; height: 280px; }
+.tabela-serie { max-height: 260px; overflow-y: auto; margin-top: 10px; }
+details summary { cursor: pointer; color: var(--text-2); font-size: 13px; margin-top: 10px; }
+.lista-simples { list-style: none; margin: 0; padding: 0; }
+.lista-simples li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.lista-simples li:last-child { border-bottom: 0; }
+.lista-simples li > :last-child { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.alerta { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.alerta a { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text); }
+.alerta a:hover { text-decoration: none; background: var(--surface-2); }
+.alerta b { font-variant-numeric: tabular-nums; }
+.ponto { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); display: inline-block; }
+.ponto.aviso { background: var(--warn); }
+{% endblock %}
+{% block conteudo %}
+<div class="topo">
+  <h1>Dashboard</h1>
+  <div class="chips" role="group" aria-label="Período">
+    <a class="chip {% if dias == 7 %}ativo{% endif %}" href="?dias=7">7 dias</a>
+    <a class="chip {% if dias == 30 %}ativo{% endif %}" href="?dias=30">30 dias</a>
+    <a class="chip {% if dias == 90 %}ativo{% endif %}" href="?dias=90">90 dias</a>
+  </div>
+</div>
+
+{% if contadores.aguardando_atendente or contadores.pedidos_conferir or pedidos_abertos %}
+<div class="alerta">
+  {% if contadores.aguardando_atendente %}<a href="{% url 'painel:conversas' %}?filtro=atendente"><span class="ponto"></span><b>{{ contadores.aguardando_atendente }}</b> conversa{{ contadores.aguardando_atendente|pluralize }} aguardando atendente</a>{% endif %}
+  {% if contadores.pedidos_conferir %}<a href="{% url 'painel:pedidos' %}?status=comprovante_recebido"><span class="ponto"></span><b>{{ contadores.pedidos_conferir }}</b> comprovante{{ contadores.pedidos_conferir|pluralize }} para conferir</a>{% endif %}
+  {% if pedidos_abertos %}<a href="{% url 'painel:pedidos' %}?status=aguardando_pagamento"><span class="ponto aviso"></span><b>{{ pedidos_abertos }}</b> pedido{{ pedidos_abertos|pluralize }} sem pagamento confirmado</a>{% endif %}
+</div>
+{% endif %}
+
+<div class="grade g-4" style="margin-bottom:16px">
+  <div class="cartao tile">
+    <div class="rotulo">Faturamento hoje</div>
+    <div class="valor">{{ hoje.total|brl }}</div>
+    <div class="det">{{ hoje.pedidos }} pedido{{ hoje.pedidos|pluralize }} · dia vira às {{ virada }}h</div>
+  </div>
+  <div class="cartao tile">
+    <div class="rotulo">Faturamento em {{ dias }} dias</div>
+    <div class="valor">{{ periodo.total|brl }}</div>
+    <div class="det">
+      {% if variacao is not None %}<span class="{% if variacao >= 0 %}sobe{% else %}desce{% endif %}">{% if variacao >= 0 %}▲ +{% else %}▼ {% endif %}{{ variacao|floatformat:0 }}%</span> vs. {{ dias }} dias anteriores{% else %}sem período anterior para comparar{% endif %}
+    </div>
+  </div>
+  <div class="cartao tile">
+    <div class="rotulo">Pedidos em {{ dias }} dias</div>
+    <div class="valor">{{ periodo.pedidos }}</div>
+    <div class="det">Ticket médio {{ periodo.ticket|brl }}</div>
+  </div>
+  <div class="cartao tile">
+    <div class="rotulo">Clientes novos em {{ dias }} dias</div>
+    <div class="valor">{{ novos_clientes }}</div>
+    <div class="det">Frete cobrado: {{ periodo.frete|brl }}</div>
+  </div>
+</div>
+
+<div class="grade g-3-1">
+  <section class="cartao">
+    <h2>Faturamento por dia <span class="muted peq">(produtos + frete, pedidos pagos)</span></h2>
+    <div class="grafico"><canvas id="grafico-ganhos" role="img" aria-label="Faturamento diário dos últimos {{ dias }} dias"></canvas></div>
+    <details>
+      <summary>Ver em tabela</summary>
+      <div class="tabela-serie">
+        <table>
+          <thead><tr><th>Dia</th><th class="num">Pedidos</th><th class="num">Produtos</th><th class="num">Frete</th><th class="num">Total</th></tr></thead>
+          <tbody>
+          {% for d in serie reversed %}
+            <tr><td>{{ d.rotulo }}</td><td class="num">{{ d.pedidos }}</td><td class="num">{{ d.produtos|brl }}</td><td class="num">{{ d.frete|brl }}</td><td class="num">{{ d.total|brl }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <div class="grade" style="align-content:start">
+    <section class="cartao">
+      <h2>Mais vendidos ({{ dias }} dias)</h2>
+      {% if top_produtos %}
+      <ul class="lista-simples">
+        {% for t in top_produtos %}<li><span>{{ t.qtd }}× {{ t.nome }}</span><span class="muted">{{ t.receita|brl }}</span></li>{% endfor %}
+      </ul>
+      {% else %}<div class="muted">Nenhuma venda paga no período.</div>{% endif %}
+    </section>
+    <section class="cartao">
+      <h2>Estoque baixo</h2>
+      {% if estoque_baixo %}
+      <ul class="lista-simples">
+        {% for e in estoque_baixo %}<li><a href="{% url 'painel:produto_editar' e.pk %}">{{ e.nome }}</a><span class="tag {% if e.estoque <= 0 %}cancelado{% else %}aguardando_pagamento{% endif %}">{% if e.estoque <= 0 %}esgotado{% else %}{{ e.estoque }} un.{% endif %}</span></li>{% endfor %}
+      </ul>
+      {% else %}<div class="muted">Nada abaixo do mínimo.</div>{% endif %}
+    </section>
+  </div>
+</div>
+{{ serie|json_script:"dados-serie" }}
+{% endblock %}
+
+{% block script %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  const serie = JSON.parse(document.getElementById('dados-serie').textContent);
+  const brl = v => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const canvas = document.getElementById('grafico-ganhos');
+  let grafico;
+
+  function desenhar() {
+    if (!window.Chart) return;
+    const css = getComputedStyle(document.documentElement);
+    const cor = n => css.getPropertyValue(n).trim();
+    if (grafico) grafico.destroy();
+    grafico = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: serie.map(d => d.rotulo),
+        datasets: [{
+          label: 'Faturamento',
+          data: serie.map(d => d.total),
+          backgroundColor: cor('--accent'),
+          hoverBackgroundColor: cor('--accent'),
+          borderRadius: { topLeft: 4, topRight: 4 },
+          borderSkipped: 'start',
+          maxBarThickness: 24,
+          categoryPercentage: 0.8,
+          barPercentage: 0.9,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: cor('--surface'),
+            titleColor: cor('--text'),
+            bodyColor: cor('--text-2'),
+            borderColor: cor('--border'),
+            borderWidth: 1,
+            padding: 10,
+            displayColors: false,
+            callbacks: {
+              label: ctx => {
+                const d = serie[ctx.dataIndex];
+                return [
+                  `Total: ${brl(d.total)}`,
+                  `Produtos: ${brl(d.produtos)}`,
+                  `Frete: ${brl(d.frete)}`,
+                  `${d.pedidos} pedido${d.pedidos === 1 ? '' : 's'}`,
+                ];
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            grid: { display: false },
+            border: { color: cor('--border') },
+            ticks: { color: cor('--muted'), maxRotation: 0, autoSkip: true, maxTicksLimit: 10 },
+          },
+          y: {
+            beginAtZero: true,
+            grid: { color: cor('--border'), lineWidth: 1 },
+            border: { display: false },
+            ticks: { color: cor('--muted'), maxTicksLimit: 5, callback: v => brl(v).replace(',00', '') },
+          },
+        },
+      },
+    });
+  }
+
+  desenhar();
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', desenhar);
+})();
+</script>
+{% endblock %}

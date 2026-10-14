@@ -1,0 +1,64 @@
+{% extends 'painel/base.html' %}
+{% block titulo %}{% if produto %}{{ produto.nome }}{% else %}Novo produto{% endif %}{% endblock %}
+{% block estilo %}
+.variantes td { padding: 6px; }
+.variantes input[type=text], .variantes input[type=number], .variantes input[type=url] { min-width: 80px; }
+{% endblock %}
+{% block conteudo %}
+<div class="topo">
+  <h1>{% if produto %}{{ produto.nome }}{% else %}Novo produto{% endif %}</h1>
+  <a class="btn" href="{% url 'painel:estoque' %}">← Estoque</a>
+</div>
+{% if sem_categoria %}
+<div class="cartao" style="margin-bottom:16px">Cadastre uma categoria antes: <a href="{% url 'painel:categorias' %}">Categorias</a></div>
+{% endif %}
+<form method="post">
+  {% csrf_token %}
+  <section class="cartao" style="margin-bottom:16px">
+    {{ form.non_field_errors }}
+    <div class="form-grade">
+      {% for campo in form %}
+      <div class="campo"{% if campo.name == 'descricao' or campo.name == 'imagem_url' %} style="grid-column: 1 / -1"{% endif %}>
+        {% if campo.name == 'ativo' %}
+          <label>{{ campo }} Mostrar no cardápio</label>
+        {% else %}
+          <label for="{{ campo.id_for_label }}">{{ campo.label }}</label>{{ campo }}
+        {% endif %}
+        {% if campo.help_text %}<div class="ajuda">{{ campo.help_text }}</div>{% endif %}
+        {% for e in campo.errors %}<div class="erro">{{ e }}</div>{% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="cartao tabela-wrap" style="margin-bottom:16px">
+    <h2>Sabores / opções <span class="muted peq">(opcional — ex.: sabores de essência, cores de mangueira)</span></h2>
+    {{ formset.management_form }}
+    {{ formset.non_form_errors }}
+    <table class="variantes">
+      <thead><tr><th>Nome</th><th>Estoque</th><th>Imagem (URL)</th><th>Ordem</th><th>Ativa</th><th>Excluir</th></tr></thead>
+      <tbody>
+      {% for f in formset %}
+        <tr>
+          <td>{{ f.id }}{{ f.nome }}{% for e in f.nome.errors %}<div class="erro peq">{{ e }}</div>{% endfor %}</td>
+          <td>{{ f.estoque }}</td>
+          <td>{{ f.imagem_url }}</td>
+          <td style="width:80px">{{ f.ordem }}</td>
+          <td>{{ f.ativo }}</td>
+          <td>{% if f.instance.pk %}{{ f.DELETE }}{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div class="muted peq" style="margin-top:8px">Com opções, o estoque é controlado em cada opção (deixe o estoque do produto vazio). Salve para ganhar mais linhas em branco.</div>
+  </section>
+
+  <div style="display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap">
+    <button class="btn primario" type="submit">Salvar produto</button>
+    {% if produto %}
+    <button class="btn perigo" type="submit" name="excluir" value="1" formnovalidate
+            onclick="return confirm('Excluir {{ produto.nome|escapejs }}? Pedidos antigos continuam com o nome do item.')">Excluir produto</button>
+    {% endif %}
+  </div>
+</form>
+{% endblock %}

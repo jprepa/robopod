@@ -18,7 +18,7 @@ from django.views.decorators.http import require_POST
 
 from .models import SessaoChat
 from .llm_service import (
-    processar_mensagem, MENU_TABACARIA,
+    processar_mensagem, gerar_menu_texto,
     gerar_secoes_lista, gerar_secoes_categoria, gerar_secoes_variantes,
     buscar_item, buscar_categoria, item_tem_variantes, formatar_preco,
 )
@@ -26,6 +26,8 @@ from .notificacoes import (
     enviar_whatsapp, notificar_teams,
     enviar_lista_whatsapp, enviar_imagem_whatsapp,
 )
+from painel import catalogo, servicos
+
 from . import frete
 from .frete import cotar_frete
 
@@ -170,7 +172,7 @@ async def _enviar_cardapio(telefone: str) -> None:
             return
         logger.warning('Lista interativa falhou, enviando cardápio em texto')
 
-    await enviar_whatsapp(telefone, MENU_TABACARIA)
+    await enviar_whatsapp(telefone, gerar_menu_texto())
 
 
 async def _transferir_para_humano(sessao: SessaoChat, motivo: str) -> None:
@@ -339,6 +341,18 @@ async def _handler_atendimento_llm(
             )
             return
 
+        # Preço vem do banco (não da IA) e o estoque é conferido
+        itens, problemas = await catalogo.validar_itens(itens)
+        if problemas:
+            aviso = (
+                f"😕 Ops: {'; '.join(problemas)}.\n"
+                'Quer ajustar o pedido? Me diga o que prefere.'
+            )
+            sessao.historico_mensagens.append({'role': 'assistant', 'content': aviso})
+            await sessao.asave(update_fields=['historico_mensagens', 'ultima_interacao'])
+            await enviar_whatsapp(sessao.telefone, aviso)
+            return
+
         sessao.carrinho_temporario = {'itens': itens}
         sessao.estado_atual = SessaoChat.Estado.AGUARDANDO_ENDERECO
         await sessao.asave(update_fields=[
@@ -480,8 +494,13 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
         resumo, subtotal = _resumo_itens(itens)
         total = subtotal + valor_frete
 
+        sessao.carrinho_temporario['endereco'] = endereco
+        pedido = await servicos.criar_pedido(telefone, sessao.carrinho_temporario, resultado_frete)
+        numero_pedido = f' #{pedido.pk}' if pedido else ''
+
         # Atualiza sessão
         sessao.estado_atual = SessaoChat.Estado.AGUARDANDO_COMPROVANTE
+        sessao.carrinho_temporario['pedido_id'] = pedido.pk if pedido else None
         sessao.carrinho_temporario['frete'] = valor_frete
         sessao.carrinho_temporario['total'] = total
         sessao.carrinho_temporario['endereco'] = endereco
@@ -498,7 +517,7 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
         mapa = f"🗺️ _Localizado como: {endereco_mapa}_\n" if endereco_mapa else ''
 
         mensagem_cobranca = (
-            f"🧾 *Resumo do Pedido*\n\n"
+            f"🧾 *Resumo do Pedido{numero_pedido}*\n\n"
             f"{resumo}\n\n"
             f"🛍️ Subtotal: {formatar_preco(subtotal)}\n"
             f"🛵 Frete ({resultado_frete['mensagem']}): {formatar_preco(valor_frete)}\n"
@@ -516,7 +535,7 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
 
         # Notifica equipe no Teams
         await notificar_teams(
-            f'🛒 *Novo pedido aguardando pagamento*\n'
+            f'🛒 *Novo pedido{numero_pedido} aguardando pagamento*\n'
             f'📱 Cliente: {telefone}\n'
             f'📍 Endereço: {endereco}\n'
             f'🗺️ No mapa: {endereco_mapa or "?"}\n'
@@ -559,6 +578,7 @@ async def _handler_aguardando_comprovante(
         sessao.estado_atual = SessaoChat.Estado.ATENDIMENTO_HUMANO
         sessao.ultima_interacao = timezone.now()
         await sessao.asave(update_fields=['estado_atual', 'ultima_interacao'])
+        await servicos.marcar_comprovante(sessao.carrinho_temporario.get('pedido_id'))
         await enviar_whatsapp(
             sessao.telefone,
             '🙌 Comprovante recebido! Vamos conferir o pagamento e já '
@@ -614,13 +634,20 @@ async def _handler_atendimento_humano(
         f'📱 {sessao.telefone}: {texto}',
     )
 
-    # Avisa o cliente que está com um humano (só de vez em quando para não spammar)
-    await enviar_whatsapp(
-        sessao.telefone,
-        '⏳ Sua conversa está com um atendente humano. '
-        'Aguarde a resposta!\n\n'
-        '_Se quiser voltar ao atendimento automático, digite *voltar*._',
-    )
+    # Avisa o cliente que está com um humano — no máximo a cada 15 min e
+    # nunca enquanto um atendente estiver respondendo pelo painel
+    if await servicos.atendente_falou_recentemente(sessao.telefone):
+        return
+    if await servicos.aviso_humano_recente(sessao.telefone, _AVISO_HUMANO):
+        return
+    await enviar_whatsapp(sessao.telefone, _AVISO_HUMANO)
+
+
+_AVISO_HUMANO = (
+    '⏳ Sua conversa está com um atendente humano. '
+    'Aguarde a resposta!\n\n'
+    '_Se quiser voltar ao atendimento automático, digite *voltar*._'
+)
 
 
 # ── Mapa de handlers por estado ──
@@ -657,6 +684,19 @@ async def evolution_webhook(request) -> JsonResponse:
 
     telefone, texto, tipo_interacao = dados
     logger.info('📩 Mensagem de %s [%s]: %s', telefone, tipo_interacao, texto[:100])
+
+    # Histórico e cadastro do cliente para o painel
+    nome_whatsapp = (body.get('data') or {}).get('pushName') or ''
+    try:
+        cliente = await servicos.registrar_mensagem_cliente(telefone, texto, nome_whatsapp)
+    except Exception:
+        logger.exception('Falha ao registrar mensagem de %s', telefone)
+        cliente = None
+    if cliente is not None and cliente.bloqueado:
+        logger.info('Cliente %s bloqueado, mensagem ignorada', telefone)
+        return JsonResponse({'status': 'cliente bloqueado'})
+
+    await catalogo.garantir_atualizado()
 
     # Obtém ou cria sessão
     sessao = await _obter_ou_criar_sessao(telefone)

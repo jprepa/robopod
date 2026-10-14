@@ -11,6 +11,8 @@ import logging
 import httpx
 from django.conf import settings
 
+from painel.servicos import registrar_mensagem_enviada
+
 logger = logging.getLogger(__name__)
 
 # Timeout generoso para a Evolution API — a instância pode estar ocupada
@@ -74,12 +76,13 @@ def _evo_url(endpoint: str) -> str:
     )
 
 
-async def enviar_whatsapp(telefone: str, mensagem: str) -> bool:
-    """Envia mensagem de texto via Evolution API.
+async def enviar_whatsapp(telefone: str, mensagem: str, autor: str = 'bot') -> bool:
+    """Envia mensagem de texto via Evolution API e registra no histórico.
 
     Args:
         telefone: Número no formato 55XXXXXXXXXXX.
         mensagem: Texto da mensagem.
+        autor: 'bot' ou 'atendente' (quem aparece como remetente no painel).
 
     Returns:
         True se o envio foi bem-sucedido.
@@ -92,10 +95,12 @@ async def enviar_whatsapp(telefone: str, mensagem: str) -> bool:
             label=f'WhatsApp texto → {telefone}',
         )
         logger.info('WhatsApp enviado para %s', telefone)
-        return True
+        enviado = True
     except Exception:
         logger.exception('Falha ao enviar WhatsApp para %s', telefone)
-        return False
+        enviado = False
+    await registrar_mensagem_enviada(telefone, mensagem, autor, enviado)
+    return enviado
 
 
 async def enviar_imagem_whatsapp(
@@ -127,10 +132,14 @@ async def enviar_imagem_whatsapp(
             label=f'WhatsApp imagem → {telefone}',
         )
         logger.info('Imagem WhatsApp enviada para %s', telefone)
-        return True
+        enviado = True
     except Exception:
         logger.exception('Falha ao enviar imagem WhatsApp para %s', telefone)
-        return False
+        enviado = False
+    await registrar_mensagem_enviada(
+        telefone, f'[imagem] {legenda}'.strip(), 'bot', enviado,
+    )
+    return enviado
 
 
 async def enviar_lista_whatsapp(
@@ -169,10 +178,12 @@ async def enviar_lista_whatsapp(
             label=f'WhatsApp lista → {telefone}',
         )
         logger.info('Lista interativa WhatsApp enviada para %s', telefone)
-        return True
+        enviado = True
     except Exception:
         logger.exception('Falha ao enviar lista WhatsApp para %s', telefone)
-        return False
+        enviado = False
+    await registrar_mensagem_enviada(telefone, f'[lista] {titulo}', 'bot', enviado)
+    return enviado
 
 
 async def enviar_botoes_whatsapp(
@@ -208,10 +219,12 @@ async def enviar_botoes_whatsapp(
             label=f'WhatsApp botões → {telefone}',
         )
         logger.info('Botões WhatsApp enviados para %s', telefone)
-        return True
+        enviado = True
     except Exception:
         logger.exception('Falha ao enviar botões WhatsApp para %s', telefone)
-        return False
+        enviado = False
+    await registrar_mensagem_enviada(telefone, f'[botões] {titulo}', 'bot', enviado)
+    return enviado
 
 
 async def notificar_teams(mensagem: str) -> bool:

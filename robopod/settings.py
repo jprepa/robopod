@@ -9,6 +9,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'insecure-dev-key-change-me')
 DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
+# Ex.: https://painel.seudominio.com.br (necessário para login via HTTPS/domínio)
+CSRF_TRUSTED_ORIGINS = [o for o in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if o]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -18,6 +20,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'core',
+    'painel',
 ]
 
 MIDDLEWARE = [
@@ -67,6 +70,14 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# ── Painel ──
+LOGIN_URL = 'painel:login'
+LOGIN_REDIRECT_URL = 'painel:dashboard'
+LOGOUT_REDIRECT_URL = 'painel:login'
+# Hora em que vira o "dia comercial" nos relatórios: com a loja aberta das 18h
+# às 03h, uma venda à 01h conta para a noite anterior.
+PAINEL_VIRADA_DIA_HORA = int(os.getenv('PAINEL_VIRADA_DIA_HORA', '6'))
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

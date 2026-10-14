@@ -1,0 +1,58 @@
+{% extends 'painel/base.html' %}
+{% load painel_tags %}
+{% block titulo %}Pedido #{{ pedido.pk }}{% endblock %}
+{% block conteudo %}
+<div class="topo">
+  <h1>Pedido #{{ pedido.pk }} <span class="tag {{ pedido.status }}" style="vertical-align:middle">{{ pedido.get_status_display }}</span></h1>
+  <a class="btn" href="{% url 'painel:pedidos' %}">← Pedidos</a>
+</div>
+<div class="grade g-3-1">
+  <div class="grade" style="align-content:start">
+    <section class="cartao tabela-wrap">
+      <h2>Itens</h2>
+      <table>
+        <thead><tr><th>Item</th><th class="num">Qtd.</th><th class="num">Unit.</th><th class="num">Total</th></tr></thead>
+        <tbody>
+        {% for i in pedido.itens.all %}
+          <tr><td>{{ i.nome }}{% if not i.produto_id %} <span class="muted peq">(fora do catálogo)</span>{% endif %}</td><td class="num">{{ i.quantidade }}</td><td class="num">{{ i.preco_unitario|brl }}</td><td class="num">{{ i.total|brl }}</td></tr>
+        {% endfor %}
+          <tr><td colspan="3" class="muted">Subtotal</td><td class="num">{{ pedido.subtotal|brl }}</td></tr>
+          <tr><td colspan="3" class="muted">Frete{% if pedido.distancia_km %} ({{ pedido.distancia_km|floatformat:1 }} km{% if pedido.frete_fornecedor %}, {{ pedido.frete_fornecedor }}{% endif %}){% endif %}</td><td class="num">{{ pedido.frete|brl }}</td></tr>
+          <tr><td colspan="3"><b>Total</b></td><td class="num"><b>{{ pedido.total|brl }}</b></td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section class="cartao">
+      <h2>Entrega</h2>
+      <dl class="dados" style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px">
+        <dt class="muted">Endereço</dt><dd style="margin:0">{{ pedido.endereco|default:"—" }}</dd>
+        <dt class="muted">No mapa</dt><dd style="margin:0">{{ pedido.endereco_mapa|default:"—" }}</dd>
+      </dl>
+      {% if pedido.endereco %}<div style="margin-top:10px"><a class="btn peq" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query={{ pedido.endereco_mapa|default:pedido.endereco|urlencode }}">Abrir no Google Maps ↗</a></div>{% endif %}
+    </section>
+  </div>
+
+  <div class="grade" style="align-content:start">
+    <section class="cartao">
+      <h2>Cliente</h2>
+      <div><a href="{% url 'painel:cliente' pedido.cliente.pk %}">{{ pedido.cliente.nome_exibicao }}</a></div>
+      <div class="muted">{{ pedido.cliente.telefone|telefone }}</div>
+      <div style="margin-top:10px"><a class="btn peq" href="{% url 'painel:conversa' pedido.cliente.telefone %}">Abrir conversa</a></div>
+      <div class="muted peq" style="margin-top:10px">Criado em {{ pedido.criado_em|date:"d/m/Y H:i" }} · atualizado {{ pedido.atualizado_em|date:"d/m H:i" }}</div>
+    </section>
+    <section class="cartao">
+      <h2>Status</h2>
+      <form method="post" action="{% url 'painel:pedido_status' pedido.pk %}" class="grade" style="gap:10px">
+        {% csrf_token %}
+        <input type="hidden" name="voltar" value="{{ request.get_full_path }}">
+        <select name="status">
+          {% for valor, rotulo in status_choices %}<option value="{{ valor }}" {% if valor == pedido.proximo|default:pedido.status %}selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+        </select>
+        <label class="peq"><input type="checkbox" name="avisar" value="1" checked> Avisar o cliente no WhatsApp</label>
+        <div><button class="btn primario" type="submit">Atualizar status</button></div>
+        <div class="muted peq">Cancelar devolve os itens ao estoque.</div>
+      </form>
+    </section>
+  </div>
+</div>
+{% endblock %}
