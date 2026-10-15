@@ -129,6 +129,50 @@ async def criar_pedido(telefone: str, carrinho: dict, frete: dict) -> Pedido | N
         return None
 
 
+def registrar_venda_manual(
+    itens: list[dict], *, status: str, criado_em, telefone: str = '', nome: str = '',
+    frete: Decimal = Decimal('0'), observacoes: str = '',
+) -> Pedido:
+    """Lança no painel uma venda feita fora do bot (balcão, ligação, conversa
+    no WhatsApp pessoal...) e baixa o estoque como num pedido normal.
+
+    Cada item: {'produto': Produto, 'variante': Variante | None,
+    'quantidade': int, 'preco_unitario': Decimal}."""
+    with transaction.atomic():
+        cliente = None
+        if telefone:
+            cliente, criado = Cliente.objects.get_or_create(telefone=telefone, defaults={'nome': nome[:120]})
+            if nome and not criado and not cliente.nome:
+                Cliente.objects.filter(pk=cliente.pk).update(nome=nome[:120])
+
+        subtotal = sum(i['preco_unitario'] * i['quantidade'] for i in itens)
+        pedido = Pedido.objects.create(
+            cliente=cliente,
+            origem=Pedido.Origem.MANUAL,
+            status=status,
+            subtotal=subtotal,
+            frete=frete,
+            total=subtotal + frete,
+            observacoes=observacoes,
+            criado_em=criado_em,
+        )
+        ItemPedido.objects.bulk_create([
+            ItemPedido(
+                pedido=pedido,
+                produto=i['produto'],
+                variante=i['variante'],
+                nome=(f"{i['produto'].nome} - {i['variante'].nome}" if i['variante'] else i['produto'].nome)[:200],
+                quantidade=i['quantidade'],
+                preco_unitario=i['preco_unitario'],
+            )
+            for i in itens
+        ])
+        _movimentar_estoque(pedido, -1)
+        pedido.estoque_baixado = True
+        pedido.save(update_fields=['estoque_baixado'])
+    return pedido
+
+
 def mudar_status(pedido: Pedido, status: str) -> None:
     """Muda o status, devolvendo o estoque ao cancelar (e baixando de novo se
     um pedido cancelado for reaberto)."""

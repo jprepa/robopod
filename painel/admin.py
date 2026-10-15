@@ -39,8 +39,8 @@ class ItemPedidoInline(admin.TabularInline):
 
 @admin.register(Pedido)
 class PedidoAdmin(admin.ModelAdmin):
-    list_display = ('id', 'cliente', 'status', 'total', 'criado_em')
-    list_filter = ('status',)
+    list_display = ('id', 'cliente', 'origem', 'status', 'total', 'criado_em')
+    list_filter = ('status', 'origem')
     search_fields = ('cliente__telefone', 'cliente__nome')
     inlines = [ItemPedidoInline]
 

@@ -3,7 +3,7 @@
 {% block titulo %}Pedido #{{ pedido.pk }}{% endblock %}
 {% block conteudo %}
 <div class="topo">
-  <h1>Pedido #{{ pedido.pk }} <span class="tag {{ pedido.status }}" style="vertical-align:middle">{{ pedido.get_status_display }}</span></h1>
+  <h1>Pedido #{{ pedido.pk }} <span class="tag {{ pedido.status }}" style="vertical-align:middle">{{ pedido.get_status_display }}</span>{% if pedido.origem == 'manual' %} <span class="tag manual" style="vertical-align:middle">venda manual</span>{% endif %}</h1>
   <a class="btn" href="{% url 'painel:pedidos' %}">← Pedidos</a>
 </div>
 <div class="grade g-3-1">
@@ -22,6 +22,13 @@
         </tbody>
       </table>
     </section>
+    {% if pedido.observacoes %}
+    <section class="cartao">
+      <h2>Observações</h2>
+      <div style="white-space:pre-line">{{ pedido.observacoes }}</div>
+    </section>
+    {% endif %}
+    {% if pedido.origem != 'manual' or pedido.endereco %}
     <section class="cartao">
       <h2>Entrega</h2>
       <dl class="dados" style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px">
@@ -30,14 +37,19 @@
       </dl>
       {% if pedido.endereco %}<div style="margin-top:10px"><a class="btn peq" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query={{ pedido.endereco_mapa|default:pedido.endereco|urlencode }}">Abrir no Google Maps ↗</a></div>{% endif %}
     </section>
+    {% endif %}
   </div>
 
   <div class="grade" style="align-content:start">
     <section class="cartao">
       <h2>Cliente</h2>
+      {% if pedido.cliente %}
       <div><a href="{% url 'painel:cliente' pedido.cliente.pk %}">{{ pedido.cliente.nome_exibicao }}</a></div>
       <div class="muted">{{ pedido.cliente.telefone|telefone }}</div>
       <div style="margin-top:10px"><a class="btn peq" href="{% url 'painel:conversa' pedido.cliente.telefone %}">Abrir conversa</a></div>
+      {% else %}
+      <div class="muted">Venda no balcão, sem cliente identificado.</div>
+      {% endif %}
       <div class="muted peq" style="margin-top:10px">Criado em {{ pedido.criado_em|date:"d/m/Y H:i" }} · atualizado {{ pedido.atualizado_em|date:"d/m H:i" }}</div>
     </section>
     <section class="cartao">
@@ -48,7 +60,7 @@
         <select name="status">
           {% for valor, rotulo in status_choices %}<option value="{{ valor }}" {% if valor == pedido.proximo|default:pedido.status %}selected{% endif %}>{{ rotulo }}</option>{% endfor %}
         </select>
-        <label class="peq"><input type="checkbox" name="avisar" value="1" checked> Avisar o cliente no WhatsApp</label>
+        {% if pedido.cliente %}<label class="peq"><input type="checkbox" name="avisar" value="1" {% if pedido.origem != 'manual' %}checked{% endif %}> Avisar o cliente no WhatsApp</label>{% endif %}
         <div><button class="btn primario" type="submit">Atualizar status</button></div>
         <div class="muted peq">Cancelar devolve os itens ao estoque.</div>
       </form>

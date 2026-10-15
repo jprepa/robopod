@@ -17,6 +17,7 @@ tbody + tbody { border-top: 1px solid var(--border); }
 <div class="topo">
   <h1>Estoque e cardápio</h1>
   <div style="display:flex;gap:8px">
+    <a class="btn" href="{% url 'painel:venda_manual' %}" title="Venda feita fora do bot: baixa o estoque e entra nos relatórios">Lançar venda manual</a>
     <a class="btn" href="{% url 'painel:categorias' %}">Categorias</a>
     <a class="btn primario" href="{% url 'painel:produto_novo' %}">+ Novo produto</a>
   </div>

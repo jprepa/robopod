@@ -388,6 +388,7 @@ robopod/
     ├── servicos.py           # Clientes, histórico, pedidos e estoque
     ├── views.py / urls.py    # Telas do painel
     ├── catalogo_inicial.py   # Cardápio gravado na 1ª migração
+    ├── management/commands/importar_cardapio.py  # Cardápio a partir do cardapio.txt
     └── templates/painel/     # HTML (Django + HTMX + Chart.js via CDN)
 ```
 
@@ -441,6 +442,10 @@ Content-Type: application/json
 | **Clientes** | Cadastro por número, criado automaticamente na primeira mensagem (com o nome do perfil do WhatsApp). Mostra total gasto, nº de pedidos, último pedido e o que mais pede. Dá para editar nome/observações e **bloquear** o número (o bot passa a ignorá-lo). |
 | **Pedidos** | Criados automaticamente quando o frete é cotado. Status: aguardando pagamento → comprovante recebido → pago → saiu para entrega → entregue (ou cancelado). Cada mudança pode avisar o cliente no WhatsApp; cancelar devolve o estoque; entregue/cancelado devolve a conversa ao bot. |
 | **Estoque** | Cardápio do bot: categorias, produtos, preços, sabores/opções e estoque, com ajuste rápido (+/−, preço, ocultar). Vale na hora para o bot. Estoque vazio = não controla; zerado ou oculto some do cardápio. O pedido reserva o estoque ao ser criado. |
+
+Para trocar o cardápio inteiro de uma vez (modelos, preços e sabores), edite
+`cardapio.txt` e rode `python manage.py importar_cardapio` (`--simular` mostra antes o
+que muda). Sabor com ❌ no começo da linha entra esgotado (estoque 0).
 
 O bot agora usa o **preço do banco** (não o que a IA escreveu) e confere o estoque
 ao fechar o pedido. Se faltar algo, avisa o cliente e pede para ajustar.

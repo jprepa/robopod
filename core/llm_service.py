@@ -6,6 +6,7 @@ Function Calling para fechar pedidos ou escalar para humano.
 
 import json
 import logging
+import re
 from typing import Any
 
 from django.conf import settings
@@ -56,6 +57,7 @@ def gerar_menu_texto() -> str:
     ]
 
     numero = 1
+    exemplo = ''
     for categoria in _categorias():
         linhas.append(f"{categoria['emoji']} *{categoria['nome'].upper()}*".strip())
 
@@ -64,16 +66,26 @@ def gerar_menu_texto() -> str:
             if item['variantes']:
                 nomes_var = ', '.join(v['nome'] for v in item['variantes'])
                 linhas.append(f'    ↳ _{nomes_var}_')
+            if not exemplo:
+                exemplo = _exemplo_pedido(item)
             numero += 1
 
         linhas.append('')  # linha em branco entre categorias
 
     linhas.append('━━━━━━━━━━━━━━━')
-    linhas.append(
-        '👉 Para pedir, é só escrever o que deseja ou o número do item.\n'
-        '_Ex.: "2 essência premium menta e 1 carvão coco"_'
-    )
+    linhas.append('👉 Para pedir, é só escrever o que deseja ou o número do item.')
+    if exemplo:
+        linhas.append(f'_Ex.: "{exemplo}"_')
     return '\n'.join(linhas)
+
+
+def _exemplo_pedido(item: dict) -> str:
+    """'1 Ignite V35 Cherry Ice' a partir do primeiro item do cardápio."""
+    nome = re.sub(r'\s*\([^)]*\)', '', item['nome']).strip()
+    if item['variantes']:
+        sabor = re.sub(r'[^\w\s\'-]', '', item['variantes'][0]['nome']).strip()
+        nome = f'{nome} {sabor}'
+    return f'1 {nome}'
 
 
 # Limites da mensagem de lista do WhatsApp — acima disso a lista é rejeitada

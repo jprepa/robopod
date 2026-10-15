@@ -131,10 +131,18 @@ class Pedido(models.Model):
         ENTREGUE = 'entregue', 'Entregue'
         CANCELADO = 'cancelado', 'Cancelado'
 
+    class Origem(models.TextChoices):
+        WHATSAPP = 'whatsapp', 'WhatsApp'
+        MANUAL = 'manual', 'Venda manual'
+
     # Pedidos que contam como venda nos relatórios
     STATUS_FATURADOS = (Status.PAGO, Status.EM_ENTREGA, Status.ENTREGUE)
 
-    cliente = models.ForeignKey(Cliente, on_delete=models.PROTECT, related_name='pedidos')
+    cliente = models.ForeignKey(
+        Cliente, on_delete=models.PROTECT, related_name='pedidos', null=True, blank=True,
+        help_text='Vazio em vendas manuais sem cliente identificado (balcão)',
+    )
+    origem = models.CharField(max_length=10, choices=Origem.choices, default=Origem.WHATSAPP)
     status = models.CharField(
         max_length=30, choices=Status.choices, default=Status.AGUARDANDO_PAGAMENTO, db_index=True,
     )

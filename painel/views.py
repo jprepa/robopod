@@ -75,9 +75,31 @@ def _contadores() -> dict:
     }
 
 
+def _marcas_alerta() -> dict:
+    """Marcadores que só crescem quando algo novo acontece. O navegador guarda
+    os últimos valores vistos e toca um som quando algum deles aumenta."""
+    def instante(qs) -> float:
+        ultimo = qs.aggregate(m=Max('atualizado_em'))['m']
+        return ultimo.timestamp() if ultimo else 0
+
+    msgs_cliente = Mensagem.objects.filter(autor=Mensagem.Autor.CLIENTE)
+    em_humano = SessaoChat.objects.filter(
+        estado_atual=SessaoChat.Estado.ATENDIMENTO_HUMANO,
+    ).values('telefone')
+    # Vendas lançadas à mão no painel não tocam som: quem lançou já sabe
+    pedidos_bot = Pedido.objects.exclude(origem=Pedido.Origem.MANUAL)
+    return {
+        'mensagem': msgs_cliente.aggregate(m=Max('id'))['m'] or 0,
+        'mensagem_humano': msgs_cliente.filter(telefone__in=em_humano).aggregate(m=Max('id'))['m'] or 0,
+        'pedido': pedidos_bot.aggregate(m=Max('id'))['m'] or 0,
+        'comprovante': instante(pedidos_bot.filter(status=Pedido.Status.COMPROVANTE_RECEBIDO)),
+        'pago': instante(pedidos_bot.filter(status=Pedido.Status.PAGO)),
+    }
+
+
 @login_required
 def contadores(request):
-    return JsonResponse(_contadores())
+    return JsonResponse({**_contadores(), 'marcas': _marcas_alerta()})
 
 
 def _render(request, template: str, contexto: dict) -> HttpResponse:
@@ -446,19 +468,159 @@ def pedido_status(request, pk: int):
 
     servicos.mudar_status(obj, novo)
     rotulo = Pedido.Status(novo).label
-    if request.POST.get('avisar') and novo in _AVISOS_STATUS:
+    if request.POST.get('avisar') and novo in _AVISOS_STATUS and obj.cliente:
         ok = async_to_sync(enviar_whatsapp)(obj.cliente.telefone, _AVISOS_STATUS[novo].format(n=obj.pk))
         messages.success(request, f'Pedido #{obj.pk}: {rotulo}' + (' — cliente avisado.' if ok else ' — falha ao avisar no WhatsApp.'))
     else:
         messages.success(request, f'Pedido #{obj.pk}: {rotulo}.')
 
     # Pedido encerrado: a conversa volta para o bot
-    if novo in (Pedido.Status.ENTREGUE, Pedido.Status.CANCELADO):
+    if novo in (Pedido.Status.ENTREGUE, Pedido.Status.CANCELADO) and obj.cliente:
         sessao = SessaoChat.objects.filter(telefone=obj.cliente.telefone).first()
         if sessao and sessao.carrinho_temporario.get('pedido_id') == obj.pk:
             sessao.resetar_sessao()
             sessao.save()
     return redirect(request.POST.get('voltar') or 'painel:pedidos')
+
+
+# Status possíveis ao lançar uma venda manual (o primeiro é o padrão)
+_STATUS_VENDA_MANUAL = (Pedido.Status.ENTREGUE, Pedido.Status.PAGO, Pedido.Status.AGUARDANDO_PAGAMENTO)
+
+
+def _opcoes_venda() -> list[dict]:
+    """Itens vendáveis agrupados por categoria. Produto com opções é vendido
+    pela opção, que é onde fica o estoque."""
+    grupos = []
+    for cat in Categoria.objects.prefetch_related('produtos__variantes'):
+        itens = []
+        for p in cat.produtos.all():
+            variantes = list(p.variantes.all())
+            for v in variantes:
+                itens.append({
+                    'id': f'v{v.pk}', 'nome': f'{p.nome} - {v.nome}', 'preco': str(p.preco),
+                    'estoque': v.estoque, 'oculto': not (p.ativo and v.ativo),
+                })
+            if not variantes:
+                itens.append({
+                    'id': f'p{p.pk}', 'nome': p.nome, 'preco': str(p.preco),
+                    'estoque': p.estoque, 'oculto': not p.ativo,
+                })
+        if itens:
+            grupos.append({'titulo': cat.titulo, 'itens': itens})
+    return grupos
+
+
+def _ler_itens_venda(post) -> tuple[list[dict], list[str]]:
+    itens, erros = [], []
+    produtos = {p.pk: p for p in Produto.objects.all()}
+    variantes = {v.pk: v for v in Variante.objects.all()}
+    for ref, qtd, preco in zip(post.getlist('item'), post.getlist('qtd'), post.getlist('preco')):
+        if not ref:
+            continue
+        if ref.startswith('v') and ref[1:].isdigit() and int(ref[1:]) in variantes:
+            variante = variantes[int(ref[1:])]
+            produto = produtos[variante.produto_id]
+        elif ref.startswith('p') and ref[1:].isdigit() and int(ref[1:]) in produtos:
+            variante, produto = None, produtos[int(ref[1:])]
+        else:
+            erros.append('Item não encontrado no catálogo.')
+            continue
+        nome = f'{produto.nome} - {variante.nome}' if variante else produto.nome
+        try:
+            quantidade = int(qtd)
+            if quantidade < 1:
+                raise ValueError
+        except ValueError:
+            erros.append(f'Quantidade inválida para {nome}.')
+            continue
+        try:
+            preco_unitario = Decimal(preco.replace(',', '.')) if preco.strip() else produto.preco
+            if not preco_unitario.is_finite() or preco_unitario < 0:
+                raise ArithmeticError
+        except ArithmeticError:
+            erros.append(f'Preço inválido para {nome}.')
+            continue
+        itens.append({
+            'produto': produto, 'variante': variante, 'quantidade': quantidade,
+            'preco_unitario': preco_unitario.quantize(Decimal('0.01')),
+        })
+    if not itens and not erros:
+        erros.append('Adicione pelo menos um item.')
+    return itens, erros
+
+
+def _normalizar_telefone(texto: str) -> str | None:
+    """'(11) 98888-7777' -> '5511988887777'. Vazio -> ''. Inválido -> None."""
+    digitos = ''.join(c for c in texto if c.isdigit())
+    if not digitos:
+        return ''
+    if len(digitos) in (10, 11):
+        digitos = '55' + digitos
+    return digitos if len(digitos) in (12, 13) and digitos.startswith('55') else None
+
+
+@login_required
+def venda_manual(request):
+    """Lança uma venda feita fora do bot para o estoque e os relatórios baterem."""
+    agora_local = timezone.localtime().replace(second=0, microsecond=0)
+    dados = {
+        'telefone': '', 'nome': '', 'frete': '', 'observacoes': '',
+        'status': _STATUS_VENDA_MANUAL[0], 'quando': agora_local.strftime('%Y-%m-%dT%H:%M'),
+        'itens': [],
+    }
+    if request.method == 'POST':
+        post = request.POST
+        dados.update({k: post.get(k, '').strip() for k in ('telefone', 'nome', 'frete', 'observacoes', 'status', 'quando')})
+        dados['itens'] = [
+            {'id': i, 'qtd': q, 'preco': p}
+            for i, q, p in zip(post.getlist('item'), post.getlist('qtd'), post.getlist('preco')) if i
+        ]
+        itens, erros = _ler_itens_venda(post)
+
+        telefone = _normalizar_telefone(dados['telefone'])
+        if telefone is None:
+            erros.append('Telefone inválido. Use DDD + número, ex.: (11) 98888-7777.')
+        if dados['status'] not in _STATUS_VENDA_MANUAL:
+            erros.append('Status inválido.')
+        try:
+            frete = Decimal(dados['frete'].replace(',', '.')) if dados['frete'] else Decimal('0')
+            if not frete.is_finite() or frete < 0:
+                raise ArithmeticError
+        except ArithmeticError:
+            erros.append('Frete inválido.')
+        try:
+            quando = timezone.make_aware(datetime.fromisoformat(dados['quando']))
+            if quando > timezone.now() + timedelta(minutes=5):
+                erros.append('A data da venda não pode estar no futuro.')
+        except ValueError:
+            erros.append('Data/hora inválida.')
+
+        if not erros:
+            pedido = servicos.registrar_venda_manual(
+                itens, status=dados['status'], criado_em=quando, telefone=telefone,
+                nome=dados['nome'], frete=frete.quantize(Decimal('0.01')),
+                observacoes=dados['observacoes'],
+            )
+            messages.success(request, f'Venda manual #{pedido.pk} lançada e estoque atualizado.')
+            negativos = [
+                f'{i.nome} ({e})' for i in pedido.itens.select_related('produto', 'variante')
+                if (e := (i.variante.estoque if i.variante else i.produto.estoque)) is not None and e < 0
+            ]
+            if negativos:
+                messages.warning(
+                    request, 'Estoque ficou negativo em: ' + ', '.join(negativos)
+                    + '. Confira a contagem e corrija na tela de Estoque.',
+                )
+            return redirect('painel:pedido', pk=pedido.pk)
+        for erro in dict.fromkeys(erros):
+            messages.error(request, erro)
+
+    return _render(request, 'painel/venda_manual.html', {
+        'secao': 'pedidos',
+        'dados': dados,
+        'opcoes': _opcoes_venda(),
+        'status_opcoes': [(s.value, s.label) for s in _STATUS_VENDA_MANUAL],
+    })
 
 
 # ── Estoque ──

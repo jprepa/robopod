@@ -79,6 +79,8 @@ h2 { font-size: 15px; margin: 0 0 12px; font-weight: 650; }
 .badge:empty, .badge[data-n="0"] { display: none; }
 .lateral .rodape { margin-top: auto; font-size: 13px; color: var(--muted); padding: 0 10px; }
 .lateral .rodape button { all: unset; cursor: pointer; color: var(--accent); }
+.lateral .rodape button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.lateral .rodape #botao-som { display: block; margin: 6px 0; color: var(--text-2); }
 main { padding: 24px 28px 48px; min-width: 0; }
 .topo { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
 .cartao { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
@@ -124,11 +126,13 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
 .tag.entregue { background: var(--surface-2); color: var(--text-2); }
 .tag.cancelado { background: var(--bad-soft); color: var(--bad); }
 .tag.humano { background: var(--bad-soft); color: var(--bad); }
+.tag.manual { background: var(--accent-soft); color: var(--accent); }
 .muted { color: var(--muted); }
 .peq { font-size: 12px; }
 .avisos { list-style: none; padding: 0; margin: 0 0 16px; display: grid; gap: 8px; }
 .avisos li { padding: 10px 14px; border-radius: 8px; background: var(--good-soft); color: var(--good); }
 .avisos li.error { background: var(--bad-soft); color: var(--bad); }
+.avisos li.warning { background: var(--warn-soft); color: var(--warn); }
 .vazio { padding: 28px; text-align: center; color: var(--muted); }
 .form-grade { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
 .form-grade label, .campo label { display: block; font-size: 13px; color: var(--text-2); margin-bottom: 4px; }
@@ -140,7 +144,7 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
   .lateral { position: static; height: auto; flex-direction: row; align-items: center; overflow-x: auto; padding: 8px 12px; gap: 2px; border-right: 0; border-bottom: 1px solid var(--border); }
   .marca { padding: 0 8px 0 0; font-size: 15px; } .marca span { display: none; }
   .nav { display: flex; gap: 2px; }
-  .lateral .rodape { margin: 0 0 0 auto; white-space: nowrap; }
+  .lateral .rodape { margin: 0 0 0 auto; white-space: nowrap; display: flex; gap: 12px; align-items: center; }
   .lateral .rodape .usuario { display: none; }
   main { padding: 16px 16px 40px; }
   .g-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -165,6 +169,7 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
   </nav>
   <div class="rodape">
     <div class="usuario">{{ user.get_username }}</div>
+    <button type="button" id="botao-som" aria-pressed="true">🔔 Som ligado</button>
     <form method="post" action="{% url 'painel:logout' %}">{% csrf_token %}<button type="submit">Sair</button></form>
   </div>
 </aside>
@@ -175,7 +180,128 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
   {% block conteudo %}{% endblock %}
 </main>
 <script>
-// Atualiza os contadores do menu e o título da aba a cada 15 s
+// Sons de alerta: gerados com Web Audio (sem arquivos). A preferência fica
+// salva só neste navegador, então cada computador/celular escolhe a sua.
+window.alertasSom = (function () {
+  const CHAVE_CONFIG = 'robopod.alertas.config';
+  const CHAVE_MARCAS = 'robopod.alertas.marcas';
+
+  // Ordem = prioridade: se vários chegarem juntos, toca só o primeiro
+  const EVENTOS = {
+    atendente:       { nome: 'Cliente pediu atendente', padrao: true },
+    pago:            { nome: 'Pagamento confirmado', padrao: true },
+    comprovante:     { nome: 'Comprovante de pagamento recebido', padrao: true },
+    pedido:          { nome: 'Novo pedido', padrao: true },
+    mensagem_humano: { nome: 'Mensagem de cliente em atendimento humano', padrao: true },
+    mensagem:        { nome: 'Qualquer mensagem de cliente (inclusive as que o bot responde)', padrao: false },
+  };
+
+  // [frequência Hz, início s, duração s, forma de onda, volume]
+  const SONS = {
+    atendente:       [[880, 0, .16, 'triangle', .6], [660, .18, .16, 'triangle', .6], [880, .36, .16, 'triangle', .6], [660, .54, .28, 'triangle', .6]],
+    pago:            [[1047, 0, .12, 'sine', .5], [1319, .07, .12, 'sine', .5], [1568, .14, .14, 'sine', .5], [2093, .22, .5, 'sine', .45], [3136, .22, .4, 'sine', .12]],
+    comprovante:     [[988, 0, .5, 'sine', .55], [784, .28, .7, 'sine', .55]],
+    pedido:          [[523, 0, .14, 'triangle', .55], [659, .12, .14, 'triangle', .55], [784, .24, .32, 'triangle', .55]],
+    mensagem_humano: [[740, 0, .1, 'sine', .55], [1109, .1, .22, 'sine', .55]],
+    mensagem:        [[880, 0, .14, 'sine', .35]],
+  };
+
+  function ler(chave) { try { return JSON.parse(localStorage.getItem(chave)) || null; } catch (e) { return null; } }
+  function gravar(chave, valor) { try { localStorage.setItem(chave, JSON.stringify(valor)); } catch (e) {} }
+
+  function config() {
+    const c = ler(CHAVE_CONFIG) || {};
+    const eventos = {};
+    for (const [k, ev] of Object.entries(EVENTOS)) eventos[k] = (c.eventos && k in c.eventos) ? !!c.eventos[k] : ev.padrao;
+    return { ativo: c.ativo !== false, volume: typeof c.volume === 'number' ? c.volume : 0.7, eventos };
+  }
+  function salvar(mudancas) {
+    const c = { ...config(), ...mudancas };
+    gravar(CHAVE_CONFIG, c);
+    atualizarBotao();
+    return c;
+  }
+
+  let ctx = null;
+  function audio() {
+    if (!ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      ctx = new AC();
+      ctx.onstatechange = atualizarBotao;
+    }
+    return ctx;
+  }
+  // O navegador só libera o áudio depois de um clique/tecla na página
+  function destravar() { const c = audio(); if (c && c.state === 'suspended') c.resume().catch(() => {}); }
+  for (const ev of ['pointerdown', 'keydown']) document.addEventListener(ev, destravar, { capture: true, passive: true });
+
+  function tocar(evento, forcar) {
+    const cfg = config();
+    if (!forcar && (!cfg.ativo || !cfg.eventos[evento])) return;
+    const c = audio();
+    if (!c || !SONS[evento]) return;
+    if (c.state === 'suspended') c.resume().catch(() => {});
+    const t0 = c.currentTime + 0.03;
+    const mestre = c.createGain();
+    mestre.gain.value = cfg.volume;
+    mestre.connect(c.destination);
+    for (const [freq, ini, dur, tipo, vol] of SONS[evento]) {
+      const osc = c.createOscillator();
+      const env = c.createGain();
+      osc.type = tipo;
+      osc.frequency.value = freq;
+      env.gain.setValueAtTime(0.0001, t0 + ini);
+      env.gain.exponentialRampToValueAtTime(vol, t0 + ini + 0.015);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + ini + dur);
+      osc.connect(env).connect(mestre);
+      osc.start(t0 + ini);
+      osc.stop(t0 + ini + dur + 0.05);
+    }
+  }
+
+  // Compara com o que este navegador já viu. As marcas ficam no localStorage,
+  // então com várias abas abertas só a primeira que perceber a novidade toca.
+  function verificar(dados) {
+    if (!dados.marcas) return;
+    const atuais = { ...dados.marcas, atendente: dados.aguardando_atendente };
+    const vistas = ler(CHAVE_MARCAS);
+    gravar(CHAVE_MARCAS, atuais);
+    if (!vistas) return;  // primeira vez neste navegador: só registra
+    const novos = Object.keys(EVENTOS).filter(k => (atuais[k] || 0) > (vistas[k] || 0));
+    const cfg = config();
+    const evento = novos.find(k => cfg.eventos[k]);
+    if (evento) tocar(evento);
+  }
+
+  function atualizarBotao() {
+    const btn = document.getElementById('botao-som');
+    if (!btn) return;
+    const cfg = config();
+    const bloqueado = cfg.ativo && ctx && ctx.state === 'suspended';
+    btn.textContent = !cfg.ativo ? '🔕 Som desligado' : bloqueado ? '🔇 Clique para ativar o som' : '🔔 Som ligado';
+    btn.title = !cfg.ativo ? 'Ligar os sons de alerta' : bloqueado
+      ? 'O navegador só toca sons depois de um clique na página' : 'Desligar os sons de alerta';
+    btn.setAttribute('aria-pressed', String(cfg.ativo));
+  }
+  function alternar() {
+    const c = audio();
+    // Se estava só bloqueado pelo navegador, o clique já destrava: não desliga
+    if (config().ativo && c && c.state === 'suspended') { c.resume().then(atualizarBotao).catch(() => {}); return; }
+    const cfg = salvar({ ativo: !config().ativo });
+    if (cfg.ativo) tocar('mensagem', true);
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    audio();
+    atualizarBotao();
+    document.getElementById('botao-som')?.addEventListener('click', alternar);
+  });
+
+  return { EVENTOS, config, salvar, tocar, verificar };
+})();
+
+// Atualiza os contadores do menu e o título da aba a cada 10 s (e toca os alertas)
 (function () {
   const tituloBase = document.title;
   function aplicar(c) {
@@ -185,9 +311,12 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
     }
     const total = c.aguardando_atendente + c.pedidos_conferir;
     document.title = total ? `(${total}) ${tituloBase}` : tituloBase;
+    window.alertasSom.verificar(c);
   }
+  const buscar = () => fetch('{% url "painel:contadores" %}').then(r => r.ok ? r.json() : null).then(c => c && aplicar(c)).catch(() => {});
   aplicar({aguardando_atendente: {{ contadores.aguardando_atendente|default:0 }}, pedidos_conferir: {{ contadores.pedidos_conferir|default:0 }}});
-  setInterval(() => fetch('{% url "painel:contadores" %}').then(r => r.ok ? r.json() : null).then(c => c && aplicar(c)).catch(() => {}), 15000);
+  buscar();
+  setInterval(buscar, 10000);
 })();
 </script>
 {% block script %}{% endblock %}
