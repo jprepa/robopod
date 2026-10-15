@@ -11,6 +11,8 @@ from typing import Any
 from django.conf import settings
 from openai import AsyncOpenAI
 
+from painel import catalogo
+
 logger = logging.getLogger(__name__)
 
 # ── Cliente OpenAI (singleton por módulo) ──
@@ -24,165 +26,13 @@ def _get_client() -> AsyncOpenAI:
     return _client
 
 
-# ── Catálogo estruturado da Tabacaria ──
-CATALOGO: dict[str, Any] = {
-    'categorias': [
-        {
-            'id': 'narguiles',
-            'titulo': '🔥 Narguilés',
-            'itens': [
-                {
-                    'id': 'sessao_robopod',
-                    'nome': 'Sessão Robopod (completa)',
-                    'preco': 89.90,
-                    'descricao': 'Narguilé preparado e completo para sua sessão',
-                    'imagem_url': '',
-                    'variantes': [],
-                },
-            ],
-        },
-        {
-            'id': 'essencias',
-            'titulo': '🍬 Essências',
-            'itens': [
-                {
-                    'id': 'essencia_premium',
-                    'nome': 'Essência Premium (50g)',
-                    'preco': 25.00,
-                    'descricao': 'Essência premium de alta qualidade',
-                    'imagem_url': '',
-                    'variantes': [
-                        {'id': 'ep_menta', 'nome': 'Menta', 'imagem_url': ''},
-                        {'id': 'ep_morango', 'nome': 'Morango', 'imagem_url': ''},
-                        {'id': 'ep_uva', 'nome': 'Uva', 'imagem_url': ''},
-                        {'id': 'ep_tutti_frutti', 'nome': 'Tutti Frutti', 'imagem_url': ''},
-                    ],
-                },
-                {
-                    'id': 'essencia_gold',
-                    'nome': 'Essência Gold (50g)',
-                    'preco': 35.00,
-                    'descricao': 'Essência gold linha especial',
-                    'imagem_url': '',
-                    'variantes': [
-                        {'id': 'eg_love66', 'nome': 'Love 66', 'imagem_url': ''},
-                        {'id': 'eg_double_apple', 'nome': 'Double Apple', 'imagem_url': ''},
-                        {'id': 'eg_blueberry', 'nome': 'Blueberry Mint', 'imagem_url': ''},
-                    ],
-                },
-            ],
-        },
-        {
-            'id': 'carvao',
-            'titulo': '🪨 Carvão',
-            'itens': [
-                {
-                    'id': 'carvao_hexagonal',
-                    'nome': 'Carvão Hexagonal (caixa 250g)',
-                    'preco': 15.00,
-                    'descricao': 'Carvão hexagonal de coco 250g',
-                    'imagem_url': '',
-                    'variantes': [],
-                },
-                {
-                    'id': 'carvao_coco',
-                    'nome': 'Carvão Coco (caixa 500g)',
-                    'preco': 28.00,
-                    'descricao': 'Carvão de coco premium 500g',
-                    'imagem_url': '',
-                    'variantes': [],
-                },
-            ],
-        },
-        {
-            'id': 'acessorios',
-            'titulo': '🧴 Acessórios',
-            'itens': [
-                {
-                    'id': 'piteira',
-                    'nome': 'Piteira descartável (10 un.)',
-                    'preco': 8.00,
-                    'descricao': 'Pacote com 10 piteiras descartáveis',
-                    'imagem_url': '',
-                    'variantes': [],
-                },
-                {
-                    'id': 'mangueira',
-                    'nome': 'Mangueira lavável',
-                    'preco': 22.00,
-                    'descricao': 'Mangueira de silicone lavável',
-                    'imagem_url': '',
-                    'variantes': [
-                        {'id': 'mg_preta', 'nome': 'Preta', 'imagem_url': ''},
-                        {'id': 'mg_transparente', 'nome': 'Transparente', 'imagem_url': ''},
-                        {'id': 'mg_azul', 'nome': 'Azul', 'imagem_url': ''},
-                    ],
-                },
-                {
-                    'id': 'base_vaso',
-                    'nome': 'Base / vaso de reposição',
-                    'preco': 45.00,
-                    'descricao': 'Vaso de vidro para reposição',
-                    'imagem_url': '',
-                    'variantes': [],
-                },
-                {
-                    'id': 'rosh',
-                    'nome': 'Rosh / Cabeça de cerâmica',
-                    'preco': 30.00,
-                    'descricao': 'Rosh de cerâmica artesanal',
-                    'imagem_url': '',
-                    'variantes': [],
-                },
-            ],
-        },
-        {
-            'id': 'bebidas',
-            'titulo': '🥤 Bebidas',
-            'itens': [
-                {
-                    'id': 'agua',
-                    'nome': 'Água (500ml)',
-                    'preco': 5.00,
-                    'descricao': 'Água mineral 500ml',
-                    'imagem_url': '',
-                    'variantes': [],
-                },
-                {
-                    'id': 'refrigerante',
-                    'nome': 'Refrigerante lata (350ml)',
-                    'preco': 7.00,
-                    'descricao': 'Refrigerante lata 350ml',
-                    'imagem_url': '',
-                    'variantes': [
-                        {'id': 'ref_coca', 'nome': 'Coca-Cola', 'imagem_url': ''},
-                        {'id': 'ref_guarana', 'nome': 'Guaraná', 'imagem_url': ''},
-                        {'id': 'ref_sprite', 'nome': 'Sprite', 'imagem_url': ''},
-                    ],
-                },
-                {
-                    'id': 'suco',
-                    'nome': 'Suco natural (300ml)',
-                    'preco': 10.00,
-                    'descricao': 'Suco natural da fruta 300ml',
-                    'imagem_url': '',
-                    'variantes': [
-                        {'id': 'sc_laranja', 'nome': 'Laranja', 'imagem_url': ''},
-                        {'id': 'sc_maracuja', 'nome': 'Maracujá', 'imagem_url': ''},
-                    ],
-                },
-                {
-                    'id': 'energetico',
-                    'nome': 'Energético (250ml)',
-                    'preco': 12.00,
-                    'descricao': 'Energético lata 250ml',
-                    'imagem_url': '',
-                    'variantes': [],
-                },
-            ],
-        },
-    ],
-}
+# ── Catálogo ──
+# O cardápio vem do banco (editado no painel) via painel.catalogo; os itens
+# inativos ou sem estoque já chegam filtrados.
+
+
+def _categorias() -> list[dict]:
+    return catalogo.atual()['categorias']
 
 
 # ── Funções auxiliares do catálogo ──
@@ -206,9 +56,8 @@ def gerar_menu_texto() -> str:
     ]
 
     numero = 1
-    for categoria in CATALOGO['categorias']:
-        emoji, _, nome_cat = categoria['titulo'].partition(' ')
-        linhas.append(f'{emoji} *{nome_cat.upper()}*')
+    for categoria in _categorias():
+        linhas.append(f"{categoria['emoji']} *{categoria['nome'].upper()}*".strip())
 
         for item in categoria['itens']:
             linhas.append(f"{numero}. {item['nome']} — *{formatar_preco(item['preco'])}*")
@@ -249,7 +98,7 @@ def gerar_secoes_lista() -> list[dict]:
         Lista de seções no formato da Evolution API.
     """
     rows: list[dict] = []
-    for categoria in CATALOGO['categorias'][:_LISTA_MAX_LINHAS]:
+    for categoria in _categorias()[:_LISTA_MAX_LINHAS]:
         precos = [i['preco'] for i in categoria['itens']]
         rows.append({
             'rowId': f"cat:{categoria['id']}",
@@ -265,7 +114,7 @@ def gerar_secoes_lista() -> list[dict]:
 
 def buscar_categoria(categoria_id: str) -> dict | None:
     """Busca uma categoria no catálogo pelo ID."""
-    for categoria in CATALOGO['categorias']:
+    for categoria in _categorias():
         if categoria['id'] == categoria_id:
             return categoria
     return None
@@ -320,7 +169,7 @@ def gerar_secoes_variantes(item_id: str) -> list[dict] | None:
 
 def buscar_item(item_id: str) -> dict | None:
     """Busca um item no catálogo pelo ID."""
-    for categoria in CATALOGO['categorias']:
+    for categoria in _categorias():
         for item in categoria['itens']:
             if item['id'] == item_id:
                 return item
@@ -346,10 +195,7 @@ def item_tem_variantes(item_id: str) -> bool:
     return len(item['variantes']) > 0
 
 
-# ── Menu da Tabacaria (gerado dinamicamente a partir do catálogo) ──
-MENU_TABACARIA = gerar_menu_texto()
-
-SYSTEM_PROMPT = f"""Você é o atendente virtual da Robopod, uma tabacaria delivery noturna.
+_SYSTEM_PROMPT = """Você é o atendente virtual da Robopod, uma tabacaria delivery noturna.
 
 REGRAS INVIOLÁVEIS:
 1. Você SÓ pode oferecer os itens listados no CARDÁPIO abaixo. Se o cliente pedir algo que não existe no cardápio, diga educadamente que não está disponível.
@@ -367,8 +213,13 @@ REGRAS INVIOLÁVEIS:
 13. Se o item escolhido tiver sabores/opções e o cliente não disser qual, pergunte antes de seguir. No `fechar_pedido`, inclua a opção no nome (ex.: "Essência Premium (50g) - Menta").
 
 CARDÁPIO:
-{MENU_TABACARIA}
+{cardapio}
 """
+
+
+def gerar_system_prompt() -> str:
+    """System prompt com o cardápio atual (muda quando o painel edita o estoque)."""
+    return _SYSTEM_PROMPT.format(cardapio=gerar_menu_texto())
 
 # ── Definição das Tools (Function Calling) ──
 TOOLS = [
@@ -511,7 +362,7 @@ async def processar_mensagem(
 
     # Monta mensagens com system prompt + histórico + nova mensagem
     mensagens = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": gerar_system_prompt()},
         *historico,
         {"role": "user", "content": mensagem_usuario},
     ]

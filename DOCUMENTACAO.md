@@ -46,8 +46,8 @@ Evolution API (Webhook POST)
 │  pedido   humano               │
 │    │         │                 │
 │    ▼         ▼                 │
-│  Scraper   Teams               │
-│  (Uber)    Webhook             │
+│  Frete     Aviso no            │
+│  (moto)    grupo WhatsApp      │
 │    │                           │
 │    ▼                           │
 │  Cobrança PIX                  │
@@ -115,15 +115,18 @@ EVOLUTION_API_KEY=sua-chave-aqui
 EVOLUTION_INSTANCE=robopod
 ```
 
-### 3.4. Microsoft Teams Webhook
+### 3.4. Grupo de avisos no WhatsApp
 
-1. No Teams, vá no canal desejado → **Conectores** → **Incoming Webhook**
-2. Nomeie como "Robopod Alertas" e copie a URL
-3. Cole no `.env`:
+O bot avisa a equipe num grupo do WhatsApp: cliente pediu atendente, pedido novo,
+comprovante recebido e falha no frete.
 
-```env
-TEAMS_WEBHOOK_URL=https://outlook.office.com/webhook/...
-```
+1. Crie um grupo no WhatsApp com a equipe e **adicione o número da loja** (o do bot).
+2. No painel, abra **Configurações**, escolha o grupo na lista e clique em **Salvar**.
+3. Clique em **Enviar mensagem de teste** para confirmar.
+4. Opcional: preencha `PAINEL_URL` no `.env` para os avisos virem com link da conversa.
+
+Mensagens enviadas dentro de grupos são ignoradas pelo bot, então a equipe pode
+conversar no grupo à vontade.
 
 ### 3.5. Chave PIX
 
@@ -153,10 +156,14 @@ CHAVE_PIX=seu-email@pix.com
 | `FRETE_VALOR_MINIMO`  | Não         | Frete mínimo em R$ (padrão: `9.00`)             |
 | `FRETE_MARGEM_PERCENTUAL` | Não     | % somado ao frete (padrão: `0`)                 |
 | `FRETE_DISTANCIA_MAXIMA_KM` | Não   | Acima disso vai p/ atendente (padrão: `20`)     |
+| `FRETE_CIDADE_PADRAO` | Não       | Cidade anexada se o cliente não informar (padrão: fim do `ENDERECO_LOJA`) |
+| `LOJA_COORDENADAS`    | Não         | `lat,lng` fixos da loja (recomendado)           |
 | `WHATSAPP_MENU_INTERATIVO` | Não    | `true` = cardápio em lista interativa           |
 | `CARDAPIO_IMAGEM_URL` | Não         | Imagem enviada antes do cardápio                |
-| `TEAMS_WEBHOOK_URL`   | Não         | URL do Incoming Webhook do Teams                |
+| `PAINEL_URL`          | Não         | Endereço público do painel (link nos avisos)    |
 | `CHAVE_PIX`           | Sim         | Chave PIX para cobrança                         |
+| `CSRF_TRUSTED_ORIGINS` | Não        | URL(s) do painel com https, separadas por vírgula |
+| `PAINEL_VIRADA_DIA_HORA` | Não      | Hora em que vira o dia nos relatórios (padrão: `6`) |
 | `POSTGRES_DB`         | Não         | Nome do banco (padrão: `robopod`)               |
 | `POSTGRES_USER`       | Não         | Usuário do banco (padrão: `robopod`)            |
 | `POSTGRES_PASSWORD`   | Não         | Senha do banco (padrão: `robopod_secret`)       |
@@ -372,7 +379,16 @@ robopod/
     ├── views.py              # Webhook + roteamento + background tasks
     ├── llm_service.py        # Integração OpenAI com guardrails
     ├── scraper.py            # Cotação de frete via Playwright
-    └── notificacoes.py       # WhatsApp (Evolution) e Teams
+    ├── frete.py              # Cotação de frete (Lalamove / estimativa)
+    └── notificacoes.py       # WhatsApp (Evolution) e avisos no grupo da equipe
+│
+└── painel/                   # Painel da loja (/painel/)
+    ├── models.py             # Cliente, Categoria, Produto, Variante, Pedido, ItemPedido, Mensagem
+    ├── catalogo.py           # Cardápio do banco p/ o bot (cache + validação do carrinho)
+    ├── servicos.py           # Clientes, histórico, pedidos e estoque
+    ├── views.py / urls.py    # Telas do painel
+    ├── catalogo_inicial.py   # Cardápio gravado na 1ª migração
+    └── templates/painel/     # HTML (Django + HTMX + Chart.js via CDN)
 ```
 
 ---
@@ -410,6 +426,24 @@ Content-Type: application/json
 - URL: `http://localhost:8000/admin/`
 - Visualize e gerencie sessões de chat
 - Filtre por estado, busque por telefone
+
+### Painel da loja
+
+- URL: `http://localhost:8000/painel/` (a raiz `/` redireciona para ele)
+- Login com o mesmo usuário do admin (`python manage.py createsuperuser`)
+- Acesso por domínio/HTTPS: preencha `CSRF_TRUSTED_ORIGINS` no `.env`
+  (ex.: `https://painel.seudominio.com.br`), senão o login dá erro 403.
+
+| Seção | O que faz |
+|-------|-----------|
+| **Dashboard** | Faturamento de hoje e do período (7/30/90 dias) com variação, gráfico de faturamento por dia, mais vendidos, estoque baixo e alertas (conversas aguardando atendente, comprovantes a conferir). Conta só pedidos pagos/em entrega/entregues. O "dia" vira às `PAINEL_VIRADA_DIA_HORA` (padrão 6h), então a venda da 01h entra na noite anterior. |
+| **Conversas** | Caixa de entrada atualizada a cada 10 s, com filtros (aguardando atendente, não lidas, com pedido aberto) e busca por nome/número. Dentro da conversa, as mensagens novas aparecem sozinhas e dá para responder pelo painel (sai pelo WhatsApp da loja), usar respostas rápidas, **assumir** a conversa (o bot para de responder) ou **devolver ao bot**. |
+| **Clientes** | Cadastro por número, criado automaticamente na primeira mensagem (com o nome do perfil do WhatsApp). Mostra total gasto, nº de pedidos, último pedido e o que mais pede. Dá para editar nome/observações e **bloquear** o número (o bot passa a ignorá-lo). |
+| **Pedidos** | Criados automaticamente quando o frete é cotado. Status: aguardando pagamento → comprovante recebido → pago → saiu para entrega → entregue (ou cancelado). Cada mudança pode avisar o cliente no WhatsApp; cancelar devolve o estoque; entregue/cancelado devolve a conversa ao bot. |
+| **Estoque** | Cardápio do bot: categorias, produtos, preços, sabores/opções e estoque, com ajuste rápido (+/−, preço, ocultar). Vale na hora para o bot. Estoque vazio = não controla; zerado ou oculto some do cardápio. O pedido reserva o estoque ao ser criado. |
+
+O bot agora usa o **preço do banco** (não o que a IA escreveu) e confere o estoque
+ao fechar o pedido. Se faltar algo, avisa o cliente e pede para ajustar.
 
 ---
 
@@ -470,8 +504,15 @@ curl -X POST http://localhost:8000/webhook/evolution/ \
 - Calibre `FRETE_TAXA_BASE` / `FRETE_VALOR_KM` comparando com cotações reais do Uber Flash.
 - Sem `GOOGLE_MAPS_API_KEY` usa OpenStreetMap (grátis, pode não achar alguns endereços).
   Com a chave (Routes API ativada) a precisão melhora bastante.
-- Endereço não encontrado ou acima de `FRETE_DISTANCIA_MAXIMA_KM` → cliente vai para
-  atendente humano e o motivo aparece no Teams.
+- O endereço do cliente é localizado uma vez, priorizando a região da loja; se ele não
+  citar a cidade, o bot tenta também com `FRETE_CIDADE_PADRAO` anexada. As mesmas
+  coordenadas são usadas pela Lalamove e pela estimativa, e o resultado fica em cache.
+  Chamadas aos mapas têm novas tentativas em timeout/429/5xx.
+- O cliente vê "Localizado como: ..." no resumo para conferir o endereço entendido.
+- Endereço não encontrado → o bot pede o endereço de novo (1 vez) e depois chama atendente.
+- Acima de `FRETE_DISTANCIA_MAXIMA_KM` → atendente humano; o grupo de avisos mostra o motivo e
+  como o endereço foi interpretado no mapa.
+- Fixe `LOJA_COORDENADAS` no `.env` para a origem nunca depender da geocodificação.
 
 ### Cardápio não aparece como lista
 

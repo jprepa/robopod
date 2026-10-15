@@ -1,0 +1,6 @@
+{% load painel_tags %}{% for m in mensagens %}
+<div class="msg {{ m.autor }}{% if not m.enviada %} falhou{% endif %}" data-id="{{ m.pk }}">
+  <div class="balao">{{ m.texto|whatsapp }}</div>
+  <div class="meta">{% if m.autor == 'bot' %}Bot · {% elif m.autor == 'atendente' %}Atendente · {% endif %}{{ m.criado_em|date:"d/m H:i" }}{% if not m.enviada %} · não enviada{% endif %}</div>
+</div>
+{% endfor %}

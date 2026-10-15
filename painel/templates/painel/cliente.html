@@ -1,0 +1,60 @@
+{% extends 'painel/base.html' %}
+{% load painel_tags %}
+{% block titulo %}{{ cliente.nome_exibicao }}{% endblock %}
+{% block conteudo %}
+<div class="topo">
+  <h1>{{ cliente.nome_exibicao }} <span class="muted" style="font-size:15px;font-weight:500">{{ cliente.telefone|telefone }}</span>
+    {% if cliente.bloqueado %}<span class="tag cancelado">bloqueado</span>{% endif %}</h1>
+  <div style="display:flex;gap:8px">
+    <a class="btn primario" href="{% url 'painel:conversa' cliente.telefone %}">Abrir conversa</a>
+    <a class="btn" href="https://wa.me/{{ cliente.telefone }}" target="_blank" rel="noopener">WhatsApp ↗</a>
+  </div>
+</div>
+
+<div class="grade g-4" style="margin-bottom:16px">
+  <div class="cartao tile"><div class="rotulo">Total gasto</div><div class="valor">{{ resumo.total|brl }}</div><div class="det">{{ resumo.produtos|brl }} em produtos</div></div>
+  <div class="cartao tile"><div class="rotulo">Pedidos pagos</div><div class="valor">{{ resumo.pedidos }}</div><div class="det">Ticket médio {{ resumo.ticket|brl }}</div></div>
+  <div class="cartao tile"><div class="rotulo">Cliente desde</div><div class="valor" style="font-size:18px">{{ cliente.criado_em|date:"d/m/Y" }}</div><div class="det">{% if primeiro_pedido %}1º pedido em {{ primeiro_pedido|date:"d/m/Y" }}{% else %}ainda sem pedido pago{% endif %}</div></div>
+  <div class="cartao tile"><div class="rotulo">Mensagens</div><div class="valor">{{ num_mensagens }}</div><div class="det">Última: {{ cliente.ultima_mensagem_em|date:"d/m H:i"|default:"—" }}</div></div>
+</div>
+
+<div class="grade g-3-1">
+  <section class="cartao tabela-wrap">
+    <h2>Pedidos</h2>
+    <table>
+      <thead><tr><th>#</th><th>Data</th><th>Itens</th><th class="num">Total</th><th>Status</th></tr></thead>
+      <tbody>
+      {% for p in pedidos %}
+        <tr>
+          <td><a href="{% url 'painel:pedido' p.pk %}">#{{ p.pk }}</a></td>
+          <td>{{ p.criado_em|date:"d/m/Y H:i" }}</td>
+          <td class="muted">{% for i in p.itens.all %}{{ i.quantidade }}× {{ i.nome }}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+          <td class="num">{{ p.total|brl }}</td>
+          <td><span class="tag {{ p.status }}">{{ p.get_status_display }}</span></td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="vazio">Nenhum pedido ainda.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <div class="grade" style="align-content:start">
+    <section class="cartao">
+      <h2>Dados</h2>
+      <form method="post" class="grade" style="gap:12px">
+        {% csrf_token %}
+        <div class="campo"><label for="id_nome">Nome</label>{{ form.nome }}<div class="ajuda">WhatsApp: {{ cliente.nome_whatsapp|default:"—" }}</div></div>
+        <div class="campo"><label for="id_observacoes">Observações</label>{{ form.observacoes }}<div class="ajuda">Ex.: portaria, ponto de referência, preferências.</div></div>
+        <div class="campo"><label>{{ form.bloqueado }} Bloquear (o bot ignora este número)</label></div>
+        <div class="campo"><label>Último endereço</label><div>{{ cliente.ultimo_endereco|default:"—" }}</div></div>
+        <div><button class="btn primario" type="submit">Salvar</button></div>
+      </form>
+    </section>
+    <section class="cartao">
+      <h2>O que mais pede</h2>
+      {% for f in favoritos %}<div style="padding:4px 0">{{ f.qtd }}× {{ f.nome }}</div>{% empty %}<div class="muted">—</div>{% endfor %}
+    </section>
+  </div>
+</div>
+{% endblock %}

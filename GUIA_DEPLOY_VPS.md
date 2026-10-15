@@ -151,8 +151,8 @@ EVOLUTION_INSTANCE=robopod
 ENDERECO_LOJA=Rua da Sua Loja, 123 - Bairro, Cidade - UF
 PLAYWRIGHT_HEADLESS=true
 
-# ── Teams (deixe vazio se não usar) ──
-TEAMS_WEBHOOK_URL=
+# ── Painel (opcional: endereço público, para os avisos virem com link) ──
+PAINEL_URL=
 
 # ── PIX ──
 CHAVE_PIX=sua-chave-pix
@@ -375,22 +375,13 @@ server {
     listen 80;
     server_name bot.seudominio.com.br;
 
-    location /webhook/ {
+    # Webhook, painel (/painel/) e admin — tudo vai para o Django
+    location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location /admin/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-
-    location /static/ {
-        proxy_pass http://127.0.0.1:8000;
     }
 }
 ```
@@ -414,6 +405,192 @@ systemctl reload nginx
 ```bash
 certbot --nginx -d bot.seudominio.com.br
 ```
+
+---
+
+## 🔄 ATUALIZAR A VPS — Frete novo, Painel e Avisos no WhatsApp
+
+As mudanças são feitas e testadas **no seu PC**, salvas em commits do Git e enviadas
+ao GitHub. A VPS só **baixa** a versão nova do GitHub e reinicia o app. Nada é
+editado direto na VPS, a não ser o `.env`.
+
+```
+Seu PC ──git push──▶ GitHub ──git pull──▶ VPS ──docker compose──▶ app no ar
+```
+
+### Passo 1 — No seu PC: enviar a versão nova para o GitHub
+
+No terminal, dentro de `C:\Users\jppss\Desktop\robopod`:
+
+```bash
+# Veja em que branch está e se está tudo commitado (deve dizer "nothing to commit")
+git status
+
+# Envie a branch com as mudanças para o GitHub
+git push -u origin feat/frete-e-painel
+```
+
+Depois, no site do GitHub (github.com/jprepa/robopod), abra o **Pull Request** da
+branch `feat/frete-e-painel` para `main`, revise e clique em **Merge**.
+
+> Sem usar Pull Request, dá para juntar direto pelo terminal:
+> `git checkout main` → `git merge feat/frete-e-painel` → `git push origin main`
+
+### Passo 2 — Na VPS: entrar e conferir a pasta
+
+```bash
+ssh root@SEU_IP
+cd /root/robopod      # ou a pasta onde está o docker-compose.yml do Robopod
+git status
+```
+
+- Se aparecer `On branch main` → a VPS usa Git, siga para o Passo 3.
+- Se aparecer `not a git repository` → os arquivos foram copiados com `scp`.
+  Veja o quadro **"Se a VPS não usa Git"** no fim desta seção.
+- Se o `git status` listar arquivos **modificados** (`modified:`), alguém editou
+  direto na VPS. Guarde essas mudanças antes com `git stash` (e avise o dev).
+- Uma pasta `core/migrations/` aparecendo como "untracked" é **normal**: não apague.
+
+### Passo 3 — Backup do banco (sempre antes de atualizar)
+
+```bash
+docker compose exec -T db pg_dump -U robopod robopod > ~/backup_robopod_$(date +%F_%H%M).sql
+ls -lh ~/backup_robopod_*        # confira que o arquivo não está vazio
+```
+
+### Passo 4 — Baixar a versão nova
+
+```bash
+git pull origin main
+git log --oneline -4    # deve mostrar "Avisos da equipe em grupo do WhatsApp..." no topo
+```
+
+### Passo 5 — Atualizar o `.env`
+
+```bash
+nano .env
+```
+
+Adicione no fim (ajuste os valores):
+
+```env
+# Coordenadas exatas da loja: no Google Maps, clique com o botão direito na loja
+# e clique no número que aparece (ex.: -22.9035, -43.5612). Cole sem espaço:
+LOJA_COORDENADAS=-22.9035,-43.5612
+# Cidade usada quando o cliente não manda a cidade no endereço
+FRETE_CIDADE_PADRAO=Rio de Janeiro - RJ
+
+# Endereço do painel com https (só depois de configurar o domínio — Etapa 9)
+CSRF_TRUSTED_ORIGINS=https://bot.seudominio.com.br
+PAINEL_URL=https://bot.seudominio.com.br
+# Hora em que vira o dia nos relatórios (6 = vendas até 05:59 contam na noite anterior)
+PAINEL_VIRADA_DIA_HORA=6
+```
+
+Pode apagar a linha `TEAMS_WEBHOOK_URL` (não é mais usada). Salve com `Ctrl+O`, `Enter`, `Ctrl+X`.
+
+### Passo 6 — Reiniciar o app (aplica o código, o `.env` e cria as tabelas novas)
+
+```bash
+docker compose up -d --build --force-recreate app
+docker compose logs -f app
+```
+
+No log deve aparecer algo como:
+
+```
+Applying painel.0001_initial... OK
+Applying painel.0002_cardapio_inicial... OK
+Applying painel.0003_configuracao... OK
+```
+
+e depois `Uvicorn running on http://0.0.0.0:8000`. Saia do log com `Ctrl+C` (o app continua rodando).
+
+> A migração `0002_cardapio_inicial` grava no banco o cardápio que estava no código.
+> Daí em diante, preços e produtos são editados pelo painel (Estoque).
+
+### Passo 7 — Criar o login do painel
+
+Se você já criou um usuário para o `/admin/`, ele também entra no painel. Senão:
+
+```bash
+docker compose exec app python manage.py createsuperuser
+```
+
+Para cada pessoa da equipe, crie um usuário próprio (o mesmo comando, ou pelo `/admin/` → Usuários).
+
+### Passo 8 — Testar o frete
+
+```bash
+docker compose exec app python manage.py testar_frete "Av joaquim magalhaes, 180"
+```
+
+Deve mostrar `"sucesso": true`, a distância e o `endereco_formatado` (onde o endereço foi
+localizado). Se der `fora_area`, confira se `LOJA_COORDENADAS` está certo.
+
+### Passo 9 — Abrir o painel
+
+- **Com domínio + SSL (recomendado):** confira se o Nginx está como na Etapa 9.2
+  (com `location /`), rode `nginx -t && systemctl reload nginx` e abra
+  `https://bot.seudominio.com.br/painel/`.
+- **Só para um teste rápido, sem domínio:** `http://SEU_IP:8000/painel/`. Sem HTTPS a
+  senha trafega aberta. Não use assim no dia a dia.
+
+Se o login der **erro 403 (CSRF)**, o `CSRF_TRUSTED_ORIGINS` não bate com o endereço
+que está no navegador (precisa ter `https://` e nenhuma barra no fim). Corrija o `.env`
+e repita o Passo 6.
+
+### Passo 10 — Configurar o grupo de avisos
+
+1. No celular, crie um grupo no WhatsApp com a equipe e **adicione o número da loja**.
+2. No painel: **Configurações** → escolha o grupo → **Salvar** → **Enviar mensagem de teste**.
+3. A mensagem "Teste do Robopod" deve chegar no grupo.
+
+### Passo 11 — Teste completo pelo WhatsApp
+
+Do seu celular pessoal, faça um pedido até o fim (itens → endereço → comprovante) e confira:
+
+- no WhatsApp: o resumo traz "Localizado como: ..." e o número do pedido;
+- no painel: a conversa em **Conversas**, o pedido em **Pedidos** e o cliente em **Clientes**;
+- no grupo: os avisos de pedido novo e de comprovante.
+
+### Se algo der errado — voltar para a versão anterior
+
+```bash
+cd /root/robopod
+git checkout 7ddbdc5            # versão de antes destas mudanças
+docker compose up -d --build --force-recreate app
+```
+
+As tabelas novas não atrapalham a versão antiga. Para voltar à versão nova depois:
+`git checkout main`. Só restaure o backup do Passo 3 se o banco tiver sido danificado:
+
+```bash
+docker compose exec -T db psql -U robopod robopod < ~/backup_robopod_DATA.sql
+```
+
+### Se a VPS não usa Git (arquivos copiados com scp)
+
+O mais seguro é passar a usar Git, para as próximas atualizações serem só `git pull`:
+
+```bash
+cd /root/robopod
+cp .env ~/env_backup                 # guarda o .env
+git init
+git remote add origin https://github.com/jprepa/robopod.git
+git fetch origin
+git checkout -f -B main origin/main  # traz o código do GitHub (o .env não é tocado)
+cp ~/env_backup .env                 # por garantia
+```
+
+Depois siga do **Passo 3** em diante. Se o repositório for privado, o `git fetch` pede
+usuário e um **token** do GitHub (Settings → Developer settings → Personal access tokens)
+no lugar da senha.
+
+> **Segurança (recomendado):** com o Nginx na frente, troque no `docker-compose.yml` a linha
+> `- "8000:8000"` por `- "127.0.0.1:8000:8000"`. Assim o painel só abre pelo domínio com
+> HTTPS e não fica exposto pelo IP. O webhook da Evolution continua funcionando, porque
+> ela fala com o app pela rede interna do Docker.
 
 ---
 
@@ -449,6 +626,7 @@ docker compose exec app python manage.py shell -c "
 from core.models import SessaoChat
 s = SessaoChat.objects.get(telefone='5511999999999')
 s.resetar_sessao()
+s.save()
 print('Resetada!')
 "
 

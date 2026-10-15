@@ -1,0 +1,29 @@
+{% extends 'painel/base.html' %}
+{% block titulo %}Conversas{% endblock %}
+{% block estilo %}
+.conversa-item { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); color: var(--text); }
+.conversa-item:hover { background: var(--surface-2); text-decoration: none; }
+.conversa-item:last-child { border-bottom: 0; }
+.conversa-item .nome { font-weight: 600; display: flex; gap: 8px; align-items: center; min-width: 0; }
+.conversa-item .previa { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.conversa-item .quando { color: var(--muted); font-size: 12px; text-align: right; }
+.conversa-item.nao-lida .previa { color: var(--text); font-weight: 500; }
+.lista { padding: 0; overflow: hidden; }
+{% endblock %}
+{% block conteudo %}
+<div class="topo"><h1>Conversas</h1></div>
+<form class="filtros" method="get">
+  <input type="search" name="q" value="{{ busca }}" placeholder="Buscar por nome ou número">
+  {% if filtro %}<input type="hidden" name="filtro" value="{{ filtro }}">{% endif %}
+  <div class="chips">
+    <a class="chip {% if not filtro %}ativo{% endif %}" href="?{% if busca %}q={{ busca|urlencode }}{% endif %}">Todas</a>
+    <a class="chip {% if filtro == 'atendente' %}ativo{% endif %}" href="?filtro=atendente{% if busca %}&q={{ busca|urlencode }}{% endif %}">Aguardando atendente</a>
+    <a class="chip {% if filtro == 'nao_lidas' %}ativo{% endif %}" href="?filtro=nao_lidas{% if busca %}&q={{ busca|urlencode }}{% endif %}">Não lidas</a>
+    <a class="chip {% if filtro == 'pedido' %}ativo{% endif %}" href="?filtro=pedido{% if busca %}&q={{ busca|urlencode }}{% endif %}">Com pedido aberto</a>
+  </div>
+</form>
+<div class="cartao lista" id="lista-conversas"
+     hx-get="{{ request.get_full_path }}" hx-trigger="every 10s" hx-swap="innerHTML">
+  {% include 'painel/parciais/lista_conversas.html' %}
+</div>
+{% endblock %}

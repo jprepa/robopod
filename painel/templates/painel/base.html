@@ -1,0 +1,195 @@
+{% load painel_tags %}<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block titulo %}Painel{% endblock %} · Robopod</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f4f2;
+  --surface: #fcfcfb;
+  --surface-2: #f0efec;
+  --border: #e2e1dc;
+  --text: #0b0b0b;
+  --text-2: #52514e;
+  --muted: #7a7974;
+  --accent: #2a78d6;
+  --accent-ink: #ffffff;
+  --accent-soft: #e3eefb;
+  --good: #0f7a3d; --good-soft: #e3f4e9;
+  --warn: #8a5a00; --warn-soft: #fbf0d9;
+  --bad: #b42323; --bad-soft: #fbe5e5;
+  --bubble-cliente: #ffffff;
+  --bubble-bot: #e9f2fc;
+  --bubble-atendente: #e3f4e9;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(0,0,0,.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211; --surface: #1a1a19; --surface-2: #232321; --border: #33332f;
+    --text: #ffffff; --text-2: #c3c2b7; --muted: #8f8e86;
+    --accent: #3987e5; --accent-ink: #ffffff; --accent-soft: #1c2b40;
+    --good: #5cc98a; --good-soft: #17301f; --warn: #e6b450; --warn-soft: #33290f;
+    --bad: #f07a7a; --bad-soft: #3a1a1a;
+    --bubble-cliente: #232321; --bubble-bot: #1c2b40; --bubble-atendente: #17301f;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211; --surface: #1a1a19; --surface-2: #232321; --border: #33332f;
+  --text: #ffffff; --text-2: #c3c2b7; --muted: #8f8e86;
+  --accent: #3987e5; --accent-ink: #ffffff; --accent-soft: #1c2b40;
+  --good: #5cc98a; --good-soft: #17301f; --warn: #e6b450; --warn-soft: #33290f;
+  --bad: #f07a7a; --bad-soft: #3a1a1a;
+  --bubble-cliente: #232321; --bubble-bot: #1c2b40; --bubble-atendente: #17301f;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  display: grid; grid-template-columns: 220px 1fr; min-height: 100vh;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1 { font-size: 22px; margin: 0; font-weight: 650; }
+h2 { font-size: 15px; margin: 0 0 12px; font-weight: 650; }
+.lateral {
+  background: var(--surface); border-right: 1px solid var(--border);
+  padding: 18px 12px; display: flex; flex-direction: column; gap: 4px;
+  position: sticky; top: 0; height: 100vh;
+}
+.marca { font-weight: 700; font-size: 17px; padding: 4px 10px 16px; }
+.marca span { color: var(--muted); font-weight: 500; font-size: 12px; display: block; }
+.nav a {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 10px; border-radius: 8px; color: var(--text-2); font-weight: 500;
+}
+.nav a:hover { background: var(--surface-2); text-decoration: none; }
+.nav a.ativo { background: var(--accent-soft); color: var(--text); }
+.badge {
+  min-width: 20px; padding: 1px 7px; border-radius: 999px; font-size: 12px; font-weight: 650;
+  background: var(--bad); color: #fff; text-align: center;
+}
+.badge:empty, .badge[data-n="0"] { display: none; }
+.lateral .rodape { margin-top: auto; font-size: 13px; color: var(--muted); padding: 0 10px; }
+.lateral .rodape button { all: unset; cursor: pointer; color: var(--accent); }
+main { padding: 24px 28px 48px; min-width: 0; }
+.topo { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.cartao { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
+.grade { display: grid; gap: 16px; }
+.g-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.g-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.g-3-1 { grid-template-columns: 3fr 1.3fr; }
+.tile .rotulo { color: var(--text-2); font-size: 13px; }
+.tile .valor { font-size: 24px; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tile .det { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.sobe { color: var(--good); } .desce { color: var(--bad); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+th { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.tabela-wrap { overflow-x: auto; }
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); padding: 7px 12px; border-radius: 8px;
+  font: inherit; font-weight: 500; cursor: pointer; white-space: nowrap;
+}
+.btn:hover { background: var(--surface-2); text-decoration: none; }
+.btn.primario { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primario:hover { filter: brightness(1.08); }
+.btn.perigo { color: var(--bad); }
+.btn.peq { padding: 4px 9px; font-size: 13px; }
+input[type=text], input[type=search], input[type=number], input[type=url], input[type=password], select, textarea {
+  font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 10px; width: 100%;
+}
+input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.filtros { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.filtros input[type=search] { max-width: 280px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { padding: 5px 11px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-2); background: var(--surface); font-size: 13px; }
+.chip.ativo { background: var(--text); color: var(--surface); border-color: var(--text); }
+.chip:hover { text-decoration: none; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--surface-2); color: var(--text-2); white-space: nowrap; }
+.tag.aguardando_pagamento { background: var(--warn-soft); color: var(--warn); }
+.tag.comprovante_recebido { background: var(--accent-soft); color: var(--accent); }
+.tag.pago, .tag.em_entrega { background: var(--good-soft); color: var(--good); }
+.tag.entregue { background: var(--surface-2); color: var(--text-2); }
+.tag.cancelado { background: var(--bad-soft); color: var(--bad); }
+.tag.humano { background: var(--bad-soft); color: var(--bad); }
+.muted { color: var(--muted); }
+.peq { font-size: 12px; }
+.avisos { list-style: none; padding: 0; margin: 0 0 16px; display: grid; gap: 8px; }
+.avisos li { padding: 10px 14px; border-radius: 8px; background: var(--good-soft); color: var(--good); }
+.avisos li.error { background: var(--bad-soft); color: var(--bad); }
+.vazio { padding: 28px; text-align: center; color: var(--muted); }
+.form-grade { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+.form-grade label, .campo label { display: block; font-size: 13px; color: var(--text-2); margin-bottom: 4px; }
+.campo .ajuda { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.campo .erro { font-size: 12px; color: var(--bad); margin-top: 3px; }
+.paginacao { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 12px; }
+@media (max-width: 900px) {
+  body { grid-template-columns: 1fr; }
+  .lateral { position: static; height: auto; flex-direction: row; align-items: center; overflow-x: auto; padding: 8px 12px; gap: 2px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .marca { padding: 0 8px 0 0; font-size: 15px; } .marca span { display: none; }
+  .nav { display: flex; gap: 2px; }
+  .lateral .rodape { margin: 0 0 0 auto; white-space: nowrap; }
+  .lateral .rodape .usuario { display: none; }
+  main { padding: 16px 16px 40px; }
+  .g-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .g-2, .g-3-1, .form-grade { grid-template-columns: 1fr; }
+}
+{% block estilo %}{% endblock %}
+</style>
+<script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js"></script>
+</head>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+<aside class="lateral">
+  <div class="marca">Robopod<span>Painel da loja</span></div>
+  <nav class="nav">
+    <a href="{% url 'painel:dashboard' %}" class="{% if secao == 'dashboard' %}ativo{% endif %}">Dashboard</a>
+    <a href="{% url 'painel:conversas' %}" class="{% if secao == 'conversas' %}ativo{% endif %}">Conversas
+      <span class="badge" id="badge-atendente" data-n="{{ contadores.aguardando_atendente }}" title="Aguardando atendente">{{ contadores.aguardando_atendente }}</span></a>
+    <a href="{% url 'painel:pedidos' %}" class="{% if secao == 'pedidos' %}ativo{% endif %}">Pedidos
+      <span class="badge" id="badge-pedidos" data-n="{{ contadores.pedidos_conferir }}" title="Comprovantes a conferir">{{ contadores.pedidos_conferir }}</span></a>
+    <a href="{% url 'painel:clientes' %}" class="{% if secao == 'clientes' %}ativo{% endif %}">Clientes</a>
+    <a href="{% url 'painel:estoque' %}" class="{% if secao == 'estoque' %}ativo{% endif %}">Estoque</a>
+    <a href="{% url 'painel:configuracoes' %}" class="{% if secao == 'configuracoes' %}ativo{% endif %}">Configurações</a>
+  </nav>
+  <div class="rodape">
+    <div class="usuario">{{ user.get_username }}</div>
+    <form method="post" action="{% url 'painel:logout' %}">{% csrf_token %}<button type="submit">Sair</button></form>
+  </div>
+</aside>
+<main>
+  {% if messages %}
+  <ul class="avisos">{% for m in messages %}<li class="{{ m.tags }}">{{ m }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% block conteudo %}{% endblock %}
+</main>
+<script>
+// Atualiza os contadores do menu e o título da aba a cada 15 s
+(function () {
+  const tituloBase = document.title;
+  function aplicar(c) {
+    for (const [id, n] of [['badge-atendente', c.aguardando_atendente], ['badge-pedidos', c.pedidos_conferir]]) {
+      const el = document.getElementById(id);
+      if (el) { el.textContent = n; el.dataset.n = n; }
+    }
+    const total = c.aguardando_atendente + c.pedidos_conferir;
+    document.title = total ? `(${total}) ${tituloBase}` : tituloBase;
+  }
+  aplicar({aguardando_atendente: {{ contadores.aguardando_atendente|default:0 }}, pedidos_conferir: {{ contadores.pedidos_conferir|default:0 }}});
+  setInterval(() => fetch('{% url "painel:contadores" %}').then(r => r.ok ? r.json() : null).then(c => c && aplicar(c)).catch(() => {}), 15000);
+})();
+</script>
+{% block script %}{% endblock %}
+</body>
+</html>

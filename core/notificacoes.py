@@ -1,4 +1,4 @@
-"""Serviço de notificações externas (Evolution API e Microsoft Teams).
+"""Envio de mensagens pelo WhatsApp (Evolution API) e avisos à equipe num grupo.
 
 Todas as chamadas à Evolution API usam retry automático (até 3 tentativas
 com backoff exponencial) e timeout de 30 s para evitar que o bot fique mudo
@@ -10,6 +10,9 @@ import logging
 
 import httpx
 from django.conf import settings
+
+from painel.models import Configuracao
+from painel.servicos import registrar_mensagem_enviada
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +77,13 @@ def _evo_url(endpoint: str) -> str:
     )
 
 
-async def enviar_whatsapp(telefone: str, mensagem: str) -> bool:
-    """Envia mensagem de texto via Evolution API.
+async def enviar_whatsapp(telefone: str, mensagem: str, autor: str = 'bot') -> bool:
+    """Envia mensagem de texto via Evolution API e registra no histórico.
 
     Args:
         telefone: Número no formato 55XXXXXXXXXXX.
         mensagem: Texto da mensagem.
+        autor: 'bot' ou 'atendente' (quem aparece como remetente no painel).
 
     Returns:
         True se o envio foi bem-sucedido.
@@ -92,10 +96,12 @@ async def enviar_whatsapp(telefone: str, mensagem: str) -> bool:
             label=f'WhatsApp texto → {telefone}',
         )
         logger.info('WhatsApp enviado para %s', telefone)
-        return True
+        enviado = True
     except Exception:
         logger.exception('Falha ao enviar WhatsApp para %s', telefone)
-        return False
+        enviado = False
+    await registrar_mensagem_enviada(telefone, mensagem, autor, enviado)
+    return enviado
 
 
 async def enviar_imagem_whatsapp(
@@ -127,10 +133,14 @@ async def enviar_imagem_whatsapp(
             label=f'WhatsApp imagem → {telefone}',
         )
         logger.info('Imagem WhatsApp enviada para %s', telefone)
-        return True
+        enviado = True
     except Exception:
         logger.exception('Falha ao enviar imagem WhatsApp para %s', telefone)
-        return False
+        enviado = False
+    await registrar_mensagem_enviada(
+        telefone, f'[imagem] {legenda}'.strip(), 'bot', enviado,
+    )
+    return enviado
 
 
 async def enviar_lista_whatsapp(
@@ -169,10 +179,12 @@ async def enviar_lista_whatsapp(
             label=f'WhatsApp lista → {telefone}',
         )
         logger.info('Lista interativa WhatsApp enviada para %s', telefone)
-        return True
+        enviado = True
     except Exception:
         logger.exception('Falha ao enviar lista WhatsApp para %s', telefone)
-        return False
+        enviado = False
+    await registrar_mensagem_enviada(telefone, f'[lista] {titulo}', 'bot', enviado)
+    return enviado
 
 
 async def enviar_botoes_whatsapp(
@@ -208,36 +220,72 @@ async def enviar_botoes_whatsapp(
             label=f'WhatsApp botões → {telefone}',
         )
         logger.info('Botões WhatsApp enviados para %s', telefone)
-        return True
+        enviado = True
     except Exception:
         logger.exception('Falha ao enviar botões WhatsApp para %s', telefone)
-        return False
+        enviado = False
+    await registrar_mensagem_enviada(telefone, f'[botões] {titulo}', 'bot', enviado)
+    return enviado
 
 
-async def notificar_teams(mensagem: str) -> bool:
-    """Envia notificação para o canal do Microsoft Teams via Incoming Webhook.
+async def notificar_equipe(
+    mensagem: str, telefone: str = '', mensagem_de_cliente: bool = False,
+) -> bool:
+    """Avisa a equipe no grupo do WhatsApp escolhido em Painel > Configurações.
 
     Args:
-        mensagem: Texto da notificação.
+        mensagem: Texto do aviso (aceita *negrito* do WhatsApp).
+        telefone: Cliente do aviso; com PAINEL_URL definido, vira um link
+            direto para a conversa no painel.
+        mensagem_de_cliente: True para o repasse de mensagens em atendimento
+            humano, que pode ser desligado separadamente.
 
     Returns:
-        True se o envio foi bem-sucedido.
+        True se o aviso foi enviado.
     """
-    webhook_url = settings.TEAMS_WEBHOOK_URL
-    if not webhook_url:
-        logger.warning('TEAMS_WEBHOOK_URL não configurada, notificação ignorada.')
+    config = await Configuracao.aobter()
+    if not (config.avisos_ativos and config.grupo_avisos_id):
+        logger.info('Grupo de avisos não configurado, aviso ignorado.')
+        return False
+    if mensagem_de_cliente and not config.avisar_mensagens_atendimento:
         return False
 
+    if telefone and settings.PAINEL_URL:
+        mensagem += f"\n🔗 {settings.PAINEL_URL.rstrip('/')}/painel/conversas/{telefone}/"
     try:
         await _post_com_retry(
-            webhook_url,
-            json={'text': mensagem},
-            headers={'Content-Type': 'application/json'},
-            timeout=10,
-            label='Teams webhook',
+            _evo_url('sendText'),
+            json={'number': config.grupo_avisos_id, 'text': mensagem},
+            headers=_evo_headers(),
+            label='Aviso no grupo da equipe',
         )
-        logger.info('Notificação Teams enviada')
+        logger.info('Aviso enviado ao grupo %s', config.grupo_avisos_nome or config.grupo_avisos_id)
         return True
     except Exception:
-        logger.exception('Falha ao notificar Teams')
+        logger.exception('Falha ao avisar o grupo da equipe')
         return False
+
+
+async def listar_grupos_whatsapp(timeout: float = 10) -> list[dict]:
+    """Grupos dos quais o WhatsApp da loja participa: [{'id', 'nome', 'participantes'}].
+
+    Raises:
+        httpx.HTTPError: se a Evolution não responder.
+    """
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.get(
+            f"{settings.EVOLUTION_API_URL}/group/fetchAllGroups/{settings.EVOLUTION_INSTANCE}",
+            params={'getParticipants': 'false'},
+            headers=_evo_headers(),
+        )
+        resp.raise_for_status()
+    grupos = [
+        {
+            'id': g.get('id', ''),
+            'nome': g.get('subject') or g.get('id', ''),
+            'participantes': g.get('size') or len(g.get('participants') or []),
+        }
+        for g in resp.json() or []
+        if str(g.get('id', '')).endswith('@g.us')
+    ]
+    return sorted(grupos, key=lambda g: g['nome'].lower())

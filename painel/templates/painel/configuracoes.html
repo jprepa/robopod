@@ -1,0 +1,56 @@
+{% extends 'painel/base.html' %}
+{% block titulo %}Configurações{% endblock %}
+{% block conteudo %}
+<div class="topo"><h1>Configurações</h1></div>
+<div class="grade g-3-1">
+  <section class="cartao">
+    <h2>Avisos da equipe no WhatsApp</h2>
+    <p class="muted" style="margin-top:0">
+      O bot avisa num grupo do WhatsApp quando um cliente pede atendente, quando chega um
+      pedido ou comprovante e quando o frete falha. O número da loja precisa <b>participar do grupo</b>.
+    </p>
+    <form method="post" class="grade" style="gap:14px">
+      {% csrf_token %}
+      <div class="campo">
+        <label for="grupo">Grupo que recebe os avisos</label>
+        {% if grupos %}
+        <select name="grupo" id="grupo">
+          <option value="">— Nenhum (avisos desligados) —</option>
+          {% for g in grupos %}
+          <option value="{{ g.id }}||{{ g.nome }}" {% if g.id == config.grupo_avisos_id %}selected{% endif %}>{{ g.nome }}{% if g.participantes %} ({{ g.participantes }} pessoas){% endif %}</option>
+          {% endfor %}
+        </select>
+        <div class="ajuda">Não achou o grupo? Crie o grupo no WhatsApp com o número da loja e recarregue esta página.</div>
+        {% else %}
+        <div class="erro">{{ erro_grupos|default:"O WhatsApp da loja não participa de nenhum grupo." }}</div>
+        {% endif %}
+      </div>
+      {% if config.grupo_avisos_id and not grupo_na_lista %}
+      <div class="campo"><label>Grupo salvo</label><div>{{ config.grupo_avisos_nome|default:config.grupo_avisos_id }}</div></div>
+      {% endif %}
+      <details>
+        <summary class="muted peq" style="cursor:pointer">Informar o ID do grupo manualmente</summary>
+        <div class="campo" style="margin-top:8px">
+          <input type="text" name="grupo_manual" placeholder="1203630xxxxxxxxx@g.us">
+          <div class="ajuda">Use só se a lista acima não carregar. Tem prioridade sobre a seleção.</div>
+        </div>
+      </details>
+      <div class="campo"><label><input type="checkbox" name="avisos_ativos" value="1" {% if config.avisos_ativos %}checked{% endif %}> Enviar avisos</label></div>
+      <div class="campo"><label><input type="checkbox" name="avisar_mensagens_atendimento" value="1" {% if config.avisar_mensagens_atendimento %}checked{% endif %}> Repassar ao grupo as mensagens de clientes em atendimento humano</label>
+        <div class="ajuda">Desligue se a equipe acompanha tudo pelo painel e o grupo ficar barulhento.</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn primario" type="submit">Salvar</button>
+        {% if config.grupo_avisos_id %}<button class="btn" type="submit" name="testar" value="1" formnovalidate>Enviar mensagem de teste</button>{% endif %}
+      </div>
+    </form>
+  </section>
+  <section class="cartao">
+    <h2>Link nos avisos</h2>
+    {% if painel_url %}
+      <p style="margin-top:0">Os avisos trazem um link direto para a conversa: <span class="muted">{{ painel_url }}</span></p>
+    {% else %}
+      <p class="muted" style="margin-top:0">Para os avisos virem com link da conversa no painel, preencha <code>PAINEL_URL</code> no <code>.env</code> da VPS (ex.: <code>https://painel.seudominio.com.br</code>) e reinicie o app.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

@@ -9,6 +9,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'insecure-dev-key-change-me')
 DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
+# Ex.: https://painel.seudominio.com.br (necessário para login via HTTPS/domínio)
+CSRF_TRUSTED_ORIGINS = [o for o in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if o]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -18,6 +20,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'core',
+    'painel',
 ]
 
 MIDDLEWARE = [
@@ -68,6 +71,14 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
+# ── Painel ──
+LOGIN_URL = 'painel:login'
+LOGIN_REDIRECT_URL = 'painel:dashboard'
+LOGOUT_REDIRECT_URL = 'painel:login'
+# Hora em que vira o "dia comercial" nos relatórios: com a loja aberta das 18h
+# às 03h, uma venda à 01h conta para a noite anterior.
+PAINEL_VIRADA_DIA_HORA = int(os.getenv('PAINEL_VIRADA_DIA_HORA', '6'))
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # ── Chaves de API ──
@@ -97,6 +108,8 @@ FRETE_VALOR_KM = float(os.getenv('FRETE_VALOR_KM', '1.50'))
 FRETE_VALOR_MINIMO = float(os.getenv('FRETE_VALOR_MINIMO', '9.00'))
 FRETE_MARGEM_PERCENTUAL = float(os.getenv('FRETE_MARGEM_PERCENTUAL', '0'))
 FRETE_DISTANCIA_MAXIMA_KM = float(os.getenv('FRETE_DISTANCIA_MAXIMA_KM', '20'))
+# Cidade anexada a endereços sem cidade ("Rio de Janeiro - RJ"); vazio = fim de ENDERECO_LOJA
+FRETE_CIDADE_PADRAO = os.getenv('FRETE_CIDADE_PADRAO', '')
 
 # ── Cardápio no WhatsApp ──
 # Listas/botões interativos muitas vezes NÃO aparecem com a Evolution em modo
@@ -105,8 +118,11 @@ WHATSAPP_MENU_INTERATIVO = os.getenv('WHATSAPP_MENU_INTERATIVO', 'False').lower(
 # Opcional: URL pública de uma imagem/arte do cardápio, enviada antes do texto
 CARDAPIO_IMAGEM_URL = os.getenv('CARDAPIO_IMAGEM_URL', '')
 
-# ── Teams Webhook ──
-TEAMS_WEBHOOK_URL = os.getenv('TEAMS_WEBHOOK_URL', '')
+# ── Avisos à equipe ──
+# O grupo do WhatsApp que recebe os avisos é escolhido em Painel > Configurações.
+# Endereço público do painel (ex.: https://painel.seudominio.com.br); com ele os
+# avisos trazem um link direto para a conversa do cliente.
+PAINEL_URL = os.getenv('PAINEL_URL', '')
 
 # ── PIX ──
 CHAVE_PIX = os.getenv('CHAVE_PIX', '')
