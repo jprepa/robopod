@@ -98,7 +98,10 @@ nano .env
 ```env
 OPENAI_API_KEY=sk-proj-...
 OPENAI_MODEL=gpt-4o-mini
+OPENAI_TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe
 ```
+
+A mesma chave transcreve as mensagens de voz (veja [Mensagens de voz](#mensagens-de-voz-áudio)).
 
 > **💡 Dica:** O modelo `gpt-4o-mini` é o melhor custo-benefício para este MVP.
 > Para testes locais baratos, use `gpt-4o-mini`. Para produção, considere `gpt-4o`.
@@ -145,6 +148,8 @@ CHAVE_PIX=seu-email@pix.com
 | `DEBUG`               | Não         | `True` para desenvolvimento (padrão: `True`)    |
 | `OPENAI_API_KEY`      | Sim         | Chave da API da OpenAI                          |
 | `OPENAI_MODEL`        | Não         | Modelo a usar (padrão: `gpt-4o-mini`)           |
+| `OPENAI_TRANSCRIPTION_MODEL` | Não  | Modelo que transcreve os áudios (padrão: `gpt-4o-mini-transcribe`) |
+| `AUDIO_DURACAO_MAXIMA_SEGUNDOS` | Não | Áudios mais longos não são transcritos (padrão: `120`) |
 | `EVOLUTION_API_URL`   | Sim         | URL base da Evolution API                       |
 | `EVOLUTION_API_KEY`   | Sim         | Chave de autenticação da Evolution API          |
 | `EVOLUTION_INSTANCE`  | Sim         | Nome da instância do WhatsApp                   |
@@ -307,6 +312,11 @@ curl -X POST "${EVOLUTION_API_URL}/webhook/set/${EVOLUTION_INSTANCE}" \
   }'
 ```
 
+> **Áudios:** com `webhook_base64: false` o bot baixa cada áudio pela Evolution
+> (`/chat/getBase64FromMediaMessage`). Com `true`, o áudio já vem no webhook e o
+> download é pulado — mas toda imagem/documento também passa a vir em base64, o que
+> deixa os webhooks bem maiores. Os dois modos funcionam.
+
 ---
 
 ## 9. Fluxo da Máquina de Estados
@@ -351,6 +361,23 @@ curl -X POST "${EVOLUTION_API_URL}/webhook/set/${EVOLUTION_INSTANCE}" \
 | `aguardando_comprovante` | Frete cotado, PIX enviado, aguardando pagamento      |
 | `atendimento_humano`     | Conversa escalada para atendente humano              |
 
+### Mensagens de voz (áudio)
+
+O bot entende áudios e notas de voz do WhatsApp:
+
+1. O áudio é baixado da Evolution (ou lido do próprio webhook, se `webhook_base64` estiver ligado).
+2. A OpenAI transcreve em português (`OPENAI_TRANSCRIPTION_MODEL`).
+3. O texto segue o fluxo **como se o cliente tivesse digitado**, em qualquer estado:
+   pedido com a IA, endereço para o frete, comandos como *cancelar*/*atendente*/*voltar*.
+   Em atendimento humano, a transcrição é repassada ao grupo da equipe com 🎤.
+4. No painel, a mensagem aparece como `🎤 [áudio] <transcrição>`.
+
+Se o áudio passar de `AUDIO_DURACAO_MAXIMA_SEGUNDOS` (padrão 2 min), ou se o download ou a
+transcrição falharem, o bot pede para o cliente escrever, registra `🎤 [áudio não transcrito]`
+no painel e o estado da conversa não muda. Em atendimento humano, a equipe também é avisada
+no grupo para ouvir o áudio no WhatsApp da loja (e o bot não fala nada se um atendente
+respondeu pelo painel nos últimos 15 min). Áudios de números bloqueados não são transcritos.
+
 ---
 
 ## 10. Estrutura do Projeto
@@ -380,7 +407,8 @@ robopod/
     ├── llm_service.py        # Integração OpenAI com guardrails
     ├── scraper.py            # Cotação de frete via Playwright
     ├── frete.py              # Cotação de frete (Lalamove / estimativa)
-    └── notificacoes.py       # WhatsApp (Evolution) e avisos no grupo da equipe
+    ├── notificacoes.py       # WhatsApp (Evolution), download de mídia e avisos no grupo
+    └── tests.py              # Testes das mensagens de voz (Evolution e OpenAI simuladas)
 │
 └── painel/                   # Painel da loja (/painel/)
     ├── models.py             # Cliente, Categoria, Produto, Variante, Pedido, ItemPedido, Mensagem
@@ -490,6 +518,14 @@ curl -X POST http://localhost:8000/webhook/evolution/ \
   }'
 ```
 
+### Bot responde "Não consegui entender seu áudio"
+
+- Veja nos logs se a falha foi no download (`Falha ao baixar mídia`) ou na OpenAI
+  (`Erro ao transcrever áudio`): `docker compose logs -f app | grep -i "mídia\|áudio"`
+- Download: confira se a Evolution está conectada e se o endpoint
+  `/chat/getBase64FromMediaMessage/{instância}` responde com a `EVOLUTION_API_KEY`.
+- OpenAI: confira chave, saldo e se o modelo de `OPENAI_TRANSCRIPTION_MODEL` existe na sua conta.
+
 ### OpenAI retorna erro 401
 
 - Verifique se `OPENAI_API_KEY` está correta no `.env`
@@ -533,8 +569,15 @@ curl -X POST http://localhost:8000/webhook/evolution/ \
   - Queue de tarefas (Celery/Dramatiq) ao invés de `asyncio.create_task`
   - Cache do menu em Redis
   - Monitoramento com Sentry
-  - Testes automatizados
+  - Mais testes automatizados (hoje só as mensagens de voz têm testes, em `core/tests.py`)
 
 - **Sobre o scraping do Uber:** A interface do m.uber.com é dinâmica e pode mudar sem aviso. Mantenha os seletores atualizados e considere implementar fallbacks.
 
-- **Custos estimados (OpenAI):** Com `gpt-4o-mini`, cada conversa completa custa aproximadamente US$ 0.01–0.03, dependendo do tamanho do histórico.
+- **Custos estimados (OpenAI):** Com `gpt-4o-mini`, cada conversa completa custa aproximadamente US$ 0.01–0.03, dependendo do tamanho do histórico. A transcrição com `gpt-4o-mini-transcribe` custa cerca de US$ 0.003 por minuto de áudio.
+
+- **Rodando os testes:** o app `core` não tem migrations versionadas, então use um banco
+  SQLite descartável. Crie um `settings_teste.py` fora do repositório com
+  `from robopod.settings import *` e
+  `DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}`, e rode
+  `DJANGO_SETTINGS_MODULE=settings_teste PYTHONPATH=<pasta do arquivo> python manage.py test core`.
+  No Docker: `docker compose exec app python manage.py test core` (usa o Postgres do compose).

@@ -35,6 +35,10 @@ async def registrar_mensagem_cliente(telefone: str, texto: str, nome_whatsapp: s
     return cliente
 
 
+async def cliente_bloqueado(telefone: str) -> bool:
+    return await Cliente.objects.filter(telefone=telefone, bloqueado=True).aexists()
+
+
 async def registrar_mensagem_enviada(telefone: str, texto: str, autor: str, enviada: bool) -> None:
     """Salva uma mensagem enviada pelo bot ou pelo atendente. Nunca levanta erro:
     falhar o histórico não pode impedir o atendimento."""

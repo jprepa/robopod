@@ -6,6 +6,8 @@ com base no estado atual da sessão.
 """
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import re
@@ -21,10 +23,11 @@ from .llm_service import (
     processar_mensagem, gerar_menu_texto,
     gerar_secoes_lista, gerar_secoes_categoria, gerar_secoes_variantes,
     buscar_item, buscar_categoria, item_tem_variantes, formatar_preco,
+    transcrever_audio,
 )
 from .notificacoes import (
     enviar_whatsapp, notificar_equipe,
-    enviar_lista_whatsapp, enviar_imagem_whatsapp,
+    enviar_lista_whatsapp, enviar_imagem_whatsapp, baixar_midia_base64,
 )
 from painel import catalogo, servicos
 
@@ -67,7 +70,8 @@ def _extrair_dados_webhook(body: dict) -> tuple[str, str, str] | None:
     Returns:
         Tupla (telefone, texto, tipo_interacao) ou None se não for
         mensagem processável. tipo_interacao pode ser 'texto', 'lista',
-        'botao' ou 'midia' (imagem/documento, ex.: comprovante).
+        'botao', 'midia' (imagem/documento, ex.: comprovante) ou 'audio'
+        (mensagem de voz, ainda sem transcrição).
     """
     try:
         # Evolution API v2 payload structure
@@ -114,6 +118,10 @@ def _extrair_dados_webhook(body: dict) -> tuple[str, str, str] | None:
                 legenda = (message[tipo_midia] or {}).get('caption') or ''
                 return telefone, f'[{rotulo}] {legenda}'.strip(), 'midia'
 
+        # ── Áudio / nota de voz (transcrito depois, no webhook) ──
+        if 'audioMessage' in message and telefone:
+            return telefone, '[áudio]', 'audio'
+
         # ── Mensagem de texto convencional ──
         texto = (
             message.get('conversation')
@@ -128,6 +136,74 @@ def _extrair_dados_webhook(body: dict) -> tuple[str, str, str] | None:
     except Exception:
         logger.exception('Erro ao extrair dados do webhook')
         return None
+
+
+async def _transcrever_audio_webhook(data: dict) -> tuple[str | None, str]:
+    """Baixa e transcreve o áudio de uma mensagem do webhook.
+
+    O áudio vem no próprio payload quando a instância usa webhook_base64;
+    senão é baixado da Evolution pelo id da mensagem.
+
+    Returns:
+        (transcrição, '') em caso de sucesso, ou (None, motivo) com motivo
+        'longo' (passa do limite de duração) ou 'falha' (download/transcrição).
+    """
+    message = data.get('message') or {}
+    audio = message.get('audioMessage') or {}
+
+    try:
+        segundos = int(audio.get('seconds') or 0)
+    except (TypeError, ValueError):
+        segundos = 0
+    if segundos > settings.AUDIO_DURACAO_MAXIMA_SEGUNDOS:
+        logger.info('Áudio de %ss acima do limite, não transcrito', segundos)
+        return None, 'longo'
+
+    mimetype = audio.get('mimetype') or ''
+    conteudo = b''
+    if message.get('base64'):
+        try:
+            conteudo = base64.b64decode(message['base64'])
+        except (binascii.Error, ValueError):
+            logger.warning('Base64 do áudio no webhook é inválido, baixando da Evolution')
+    if not conteudo:
+        mensagem_id = (data.get('key') or {}).get('id')
+        baixado = await baixar_midia_base64(mensagem_id) if mensagem_id else None
+        if baixado is None:
+            return None, 'falha'
+        conteudo, mimetype = baixado[0], baixado[1] or mimetype
+
+    texto = await transcrever_audio(conteudo, mimetype)
+    if not texto:
+        return None, 'falha'
+    return texto, ''
+
+
+_AUDIO_NAO_TRANSCRITO = {
+    'longo': (
+        '🎤 Seu áudio ficou um pouco longo para eu ouvir. '
+        'Pode escrever sua mensagem, ou mandar um áudio mais curto?'
+    ),
+    'falha': (
+        '🎤 Não consegui entender seu áudio. '
+        'Pode escrever sua mensagem, por favor?'
+    ),
+}
+
+
+async def _responder_audio_nao_transcrito(sessao: SessaoChat, motivo: str) -> None:
+    """Pede ao cliente que escreva; em atendimento humano, avisa a equipe também
+    e fica quieto se um atendente estiver respondendo pelo painel."""
+    if sessao.estado_atual == SessaoChat.Estado.ATENDIMENTO_HUMANO:
+        await notificar_equipe(
+            f'🎤 *Áudio do cliente não transcrito (atendimento humano)*\n'
+            f'📱 {sessao.telefone} — ouça no WhatsApp da loja.',
+            telefone=sessao.telefone,
+            mensagem_de_cliente=True,
+        )
+        if await servicos.atendente_falou_recentemente(sessao.telefone):
+            return
+    await enviar_whatsapp(sessao.telefone, _AUDIO_NAO_TRANSCRITO[motivo])
 
 
 async def _obter_ou_criar_sessao(telefone: str) -> SessaoChat:
@@ -612,13 +688,14 @@ async def _handler_aguardando_comprovante(
 
 
 async def _handler_atendimento_humano(
-    sessao: SessaoChat, texto: str,
+    sessao: SessaoChat, texto: str, de_audio: bool = False,
 ) -> None:
     """Processa mensagem quando a sessão está em atendimento humano.
 
     Permite que o cliente volte ao atendimento automático digitando
     'voltar', 'menu' ou 'reiniciar'. Caso contrário, avisa que está
-    com um humano e repassa ao grupo da equipe.
+    com um humano e repassa ao grupo da equipe (com 🎤 se veio de um
+    áudio transcrito).
     """
     comando = _normalizar(texto)
 
@@ -636,7 +713,7 @@ async def _handler_atendimento_humano(
     # Repassa ao grupo da equipe (se configurado)
     await notificar_equipe(
         f'💬 *Mensagem do cliente (atendimento humano)*\n'
-        f'📱 {sessao.telefone}: {texto}',
+        f'📱 {sessao.telefone}: {"🎤 " if de_audio else ""}{texto}',
         telefone=sessao.telefone,
         mensagem_de_cliente=True,
     )
@@ -692,10 +769,26 @@ async def evolution_webhook(request) -> JsonResponse:
     telefone, texto, tipo_interacao = dados
     logger.info('📩 Mensagem de %s [%s]: %s', telefone, tipo_interacao, texto[:100])
 
+    # Áudio: transcreve e segue o fluxo como se o cliente tivesse digitado
+    texto_historico = texto
+    motivo_audio = ''
+    if tipo_interacao == 'audio':
+        texto_historico = '🎤 [áudio]'
+        if not await servicos.cliente_bloqueado(telefone):
+            transcricao, motivo_audio = await _transcrever_audio_webhook(body.get('data', body))
+            if transcricao:
+                texto = transcricao
+                texto_historico = f'🎤 [áudio] {transcricao}'
+                logger.info('🎤 Áudio de %s transcrito: %s', telefone, transcricao[:100])
+            else:
+                texto_historico = '🎤 [áudio não transcrito]'
+
     # Histórico e cadastro do cliente para o painel
     nome_whatsapp = (body.get('data') or {}).get('pushName') or ''
     try:
-        cliente = await servicos.registrar_mensagem_cliente(telefone, texto, nome_whatsapp)
+        cliente = await servicos.registrar_mensagem_cliente(
+            telefone, texto_historico, nome_whatsapp,
+        )
     except Exception:
         logger.exception('Falha ao registrar mensagem de %s', telefone)
         cliente = None
@@ -710,6 +803,10 @@ async def evolution_webhook(request) -> JsonResponse:
     logger.info('📋 Sessão %s — estado: %s', telefone, sessao.estado_atual)
     em_atendimento_llm = sessao.estado_atual == SessaoChat.Estado.ATENDIMENTO_LLM
 
+    if motivo_audio:
+        await _responder_audio_nao_transcrito(sessao, motivo_audio)
+        return JsonResponse({'status': 'ok'})
+
     # ── Respostas interativas no atendimento LLM ──
     if tipo_interacao == 'lista' and em_atendimento_llm:
         await _handler_selecao_lista(sessao, texto)
@@ -723,7 +820,7 @@ async def evolution_webhook(request) -> JsonResponse:
     if tipo_interacao == 'midia' and em_atendimento_llm:
         await enviar_whatsapp(
             telefone,
-            'Por enquanto só consigo ler mensagens de texto 🙂 '
+            'Por enquanto só consigo entender mensagens de texto e áudio 🙂 '
             'Me diga o que deseja ou digite *atendente*.',
         )
         return JsonResponse({'status': 'ok'})
@@ -734,7 +831,9 @@ async def evolution_webhook(request) -> JsonResponse:
 
     # ── Tratamento de texto normal via máquina de estados ──
     handler = _HANDLERS.get(sessao.estado_atual)
-    if handler:
+    if handler is _handler_atendimento_humano:
+        await handler(sessao, texto, de_audio=tipo_interacao == 'audio')
+    elif handler:
         await handler(sessao, texto)
     else:
         logger.warning('Estado desconhecido: %s', sessao.estado_atual)

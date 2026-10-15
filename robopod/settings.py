@@ -84,6 +84,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # ── Chaves de API ──
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+# Transcrição das mensagens de voz do WhatsApp
+OPENAI_TRANSCRIPTION_MODEL = os.getenv('OPENAI_TRANSCRIPTION_MODEL', 'gpt-4o-mini-transcribe')
+# Áudios mais longos que isso não são transcritos (o cliente é convidado a escrever)
+AUDIO_DURACAO_MAXIMA_SEGUNDOS = int(os.getenv('AUDIO_DURACAO_MAXIMA_SEGUNDOS', '120'))
 
 # ── Evolution API ──
 EVOLUTION_API_URL = os.getenv('EVOLUTION_API_URL', 'http://localhost:8080')
