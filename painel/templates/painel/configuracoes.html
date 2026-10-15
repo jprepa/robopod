@@ -52,5 +52,48 @@
       <p class="muted" style="margin-top:0">Para os avisos virem com link da conversa no painel, preencha <code>PAINEL_URL</code> no <code>.env</code> da VPS (ex.: <code>https://painel.seudominio.com.br</code>) e reinicie o app.</p>
     {% endif %}
   </section>
+  <section class="cartao" id="sons" style="grid-column: 1 / -1">
+    <h2>Sons de alerta neste navegador</h2>
+    <p class="muted" style="margin-top:0">
+      O painel toca um som quando algo acontece, mesmo com a aba em segundo plano. A escolha vale só
+      para este navegador. Depois de abrir o painel, <b>clique uma vez na página</b> — sem isso o navegador não deixa tocar.
+    </p>
+    <div class="grade" style="gap:10px">
+      <label><input type="checkbox" id="som-ativo"> Tocar sons de alerta</label>
+      <div class="campo" style="max-width:320px">
+        <label for="som-volume">Volume</label>
+        <input type="range" id="som-volume" min="0.05" max="1" step="0.05" style="width:100%">
+      </div>
+      <div class="tabela-wrap"><table id="som-eventos"><tbody></tbody></table></div>
+    </div>
+  </section>
 </div>
+{% endblock %}
+{% block script %}
+<script>
+(function () {
+  const sons = window.alertasSom;
+  const ativo = document.getElementById('som-ativo');
+  const volume = document.getElementById('som-volume');
+  const corpo = document.querySelector('#som-eventos tbody');
+  const cfg = sons.config();
+
+  ativo.checked = cfg.ativo;
+  volume.value = cfg.volume;
+  ativo.addEventListener('change', () => sons.salvar({ ativo: ativo.checked }));
+  volume.addEventListener('change', () => { sons.salvar({ volume: Number(volume.value) }); sons.tocar('mensagem', true); });
+
+  for (const [chave, ev] of Object.entries(sons.EVENTOS)) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><label><input type="checkbox"> <span></span></label></td>
+      <td class="num"><button class="btn peq" type="button">▶ Ouvir</button></td>`;
+    const caixa = tr.querySelector('input');
+    tr.querySelector('span').textContent = ev.nome;
+    caixa.checked = cfg.eventos[chave];
+    caixa.addEventListener('change', () => sons.salvar({ eventos: { ...sons.config().eventos, [chave]: caixa.checked } }));
+    tr.querySelector('button').addEventListener('click', () => sons.tocar(chave, true));
+    corpo.appendChild(tr);
+  }
+})();
+</script>
 {% endblock %}

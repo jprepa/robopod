@@ -75,9 +75,29 @@ def _contadores() -> dict:
     }
 
 
+def _marcas_alerta() -> dict:
+    """Marcadores que só crescem quando algo novo acontece. O navegador guarda
+    os últimos valores vistos e toca um som quando algum deles aumenta."""
+    def instante(qs) -> float:
+        ultimo = qs.aggregate(m=Max('atualizado_em'))['m']
+        return ultimo.timestamp() if ultimo else 0
+
+    msgs_cliente = Mensagem.objects.filter(autor=Mensagem.Autor.CLIENTE)
+    em_humano = SessaoChat.objects.filter(
+        estado_atual=SessaoChat.Estado.ATENDIMENTO_HUMANO,
+    ).values('telefone')
+    return {
+        'mensagem': msgs_cliente.aggregate(m=Max('id'))['m'] or 0,
+        'mensagem_humano': msgs_cliente.filter(telefone__in=em_humano).aggregate(m=Max('id'))['m'] or 0,
+        'pedido': Pedido.objects.aggregate(m=Max('id'))['m'] or 0,
+        'comprovante': instante(Pedido.objects.filter(status=Pedido.Status.COMPROVANTE_RECEBIDO)),
+        'pago': instante(Pedido.objects.filter(status=Pedido.Status.PAGO)),
+    }
+
+
 @login_required
 def contadores(request):
-    return JsonResponse(_contadores())
+    return JsonResponse({**_contadores(), 'marcas': _marcas_alerta()})
 
 
 def _render(request, template: str, contexto: dict) -> HttpResponse:
