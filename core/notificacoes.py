@@ -6,6 +6,7 @@ quando a Evolution demora a responder.
 """
 
 import asyncio
+import base64
 import logging
 
 import httpx
@@ -264,6 +265,35 @@ async def notificar_equipe(
     except Exception:
         logger.exception('Falha ao avisar o grupo da equipe')
         return False
+
+
+async def baixar_midia_base64(mensagem_id: str) -> tuple[bytes, str] | None:
+    """Baixa a mídia (ex.: áudio) de uma mensagem recebida, já descriptografada.
+
+    Usa /chat/getBase64FromMediaMessage, que a Evolution busca no WhatsApp
+    pelo id da mensagem.
+
+    Returns:
+        (conteúdo, mimetype) ou None se não conseguir baixar.
+    """
+    try:
+        resp = await _post_com_retry(
+            f"{settings.EVOLUTION_API_URL}/chat/getBase64FromMediaMessage/"
+            f"{settings.EVOLUTION_INSTANCE}",
+            json={'message': {'key': {'id': mensagem_id}}, 'convertToMp4': False},
+            headers=_evo_headers(),
+            max_tentativas=2,
+            label=f'Download de mídia {mensagem_id}',
+        )
+        dados = resp.json() or {}
+        conteudo = base64.b64decode(dados.get('base64') or '')
+    except Exception:
+        logger.exception('Falha ao baixar mídia %s', mensagem_id)
+        return None
+    if not conteudo:
+        logger.warning('Evolution devolveu mídia vazia para %s', mensagem_id)
+        return None
+    return conteudo, dados.get('mimetype') or ''
 
 
 async def listar_grupos_whatsapp(timeout: float = 10) -> list[dict]:

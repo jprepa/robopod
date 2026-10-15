@@ -455,3 +455,47 @@ async def processar_mensagem(
         LLMResult(tipo='texto', conteudo=texto_resposta),
         novo_historico,
     )
+
+
+# ── Transcrição de áudio (mensagens de voz) ──
+
+# Formatos aceitos pela OpenAI; a extensão do nome do arquivo diz o formato.
+_EXTENSOES_AUDIO = {
+    'audio/ogg': 'ogg',
+    'audio/opus': 'ogg',
+    'audio/mpeg': 'mp3',
+    'audio/mp3': 'mp3',
+    'audio/mp4': 'm4a',
+    'audio/m4a': 'm4a',
+    'audio/x-m4a': 'm4a',
+    'audio/wav': 'wav',
+    'audio/x-wav': 'wav',
+    'audio/webm': 'webm',
+}
+
+# Contexto que ajuda o modelo a acertar nomes de produtos e endereços
+_PROMPT_TRANSCRICAO = (
+    'Cliente de uma tabacaria com delivery falando pelo WhatsApp: pedido de '
+    'essências, carvão, narguilé, pods, endereço com rua, número e bairro.'
+)
+
+
+async def transcrever_audio(conteudo: bytes, mimetype: str = '') -> str | None:
+    """Transcreve um áudio em português pela OpenAI.
+
+    Returns:
+        O texto falado, ou None se a transcrição falhar ou vier vazia.
+    """
+    extensao = _EXTENSOES_AUDIO.get(mimetype.split(';')[0].strip().lower(), 'ogg')
+    try:
+        resposta = await _get_client().audio.transcriptions.create(
+            model=settings.OPENAI_TRANSCRIPTION_MODEL,
+            file=(f'audio.{extensao}', conteudo),
+            language='pt',
+            prompt=_PROMPT_TRANSCRICAO,
+        )
+    except Exception:
+        logger.exception('Erro ao transcrever áudio na OpenAI')
+        return None
+    texto = (getattr(resposta, 'text', '') or '').strip()
+    return texto or None
