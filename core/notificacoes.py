@@ -24,6 +24,12 @@ _EVO_TIMEOUT = 30
 _MAX_TENTATIVAS = 3
 _BACKOFF_BASE = 1.5  # segundos — cresce exponencialmente (1.5, 3, 6)
 
+# "Digitando..." antes de cada resposta do bot, para não parecer robô.
+# Cresce com o tamanho do texto, mas fica curto: o webhook espera o envio.
+_DIGITANDO_MIN_MS = 1000
+_DIGITANDO_MS_POR_CARACTERE = 25
+_DIGITANDO_MAX_MS = 3500
+
 
 async def _post_com_retry(
     url: str,
@@ -77,6 +83,12 @@ def _evo_url(endpoint: str) -> str:
     )
 
 
+def _delay_digitando(texto: str) -> int:
+    """Milissegundos de "digitando..." que a Evolution mostra antes de enviar."""
+    ms = _DIGITANDO_MIN_MS + len(texto) * _DIGITANDO_MS_POR_CARACTERE
+    return min(ms, _DIGITANDO_MAX_MS)
+
+
 async def enviar_whatsapp(telefone: str, mensagem: str, autor: str = 'bot') -> bool:
     """Envia mensagem de texto via Evolution API e registra no histórico.
 
@@ -88,10 +100,14 @@ async def enviar_whatsapp(telefone: str, mensagem: str, autor: str = 'bot') -> b
     Returns:
         True se o envio foi bem-sucedido.
     """
+    payload = {'number': telefone, 'text': mensagem}
+    if autor == 'bot':
+        # Mensagem de atendente já foi digitada por uma pessoa, não precisa
+        payload['delay'] = _delay_digitando(mensagem)
     try:
         await _post_com_retry(
             _evo_url('sendText'),
-            json={'number': telefone, 'text': mensagem},
+            json=payload,
             headers=_evo_headers(),
             label=f'WhatsApp texto → {telefone}',
         )
@@ -128,6 +144,7 @@ async def enviar_imagem_whatsapp(
                 'mimetype': 'image/jpeg',
                 'caption': legenda,
                 'media': url_imagem,
+                'delay': _delay_digitando(legenda),
             },
             headers=_evo_headers(),
             label=f'WhatsApp imagem → {telefone}',
@@ -174,6 +191,7 @@ async def enviar_lista_whatsapp(
                 'buttonText': botao_texto,
                 'footerText': rodape,
                 'sections': secoes,
+                'delay': _delay_digitando(descricao),
             },
             headers=_evo_headers(),
             label=f'WhatsApp lista → {telefone}',
@@ -215,6 +233,7 @@ async def enviar_botoes_whatsapp(
                 'description': descricao,
                 'footer': rodape,
                 'buttons': botoes,
+                'delay': _delay_digitando(descricao),
             },
             headers=_evo_headers(),
             label=f'WhatsApp botões → {telefone}',

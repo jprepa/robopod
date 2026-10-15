@@ -634,6 +634,26 @@ print('Resetada!')
 # http://SEU_IP:8000/admin/
 ```
 
+### Atualizar o cardápio (modelos, preços e sabores)
+
+O cardápio do bot fica no arquivo `cardapio.txt` (raiz do projeto), no mesmo formato
+da lista de sabores: `Modelo - 3.500 puffs`, depois `R$ 90,00` e um sabor por linha.
+Marque com ❌ no começo da linha o sabor esgotado. Edite o arquivo (no PC, envie pelo
+Git; ou direto na VPS com `nano cardapio.txt`) e rode:
+
+```bash
+# Mostra o que vai mudar, sem gravar
+docker compose exec app python manage.py importar_cardapio --simular
+
+# Aplica
+docker compose exec app python manage.py importar_cardapio
+```
+
+Vale na hora para o bot, sem reiniciar. Produtos e sabores são atualizados pelo nome
+(não duplica); o que não está no arquivo é **ocultado** (não apagado) — use
+`--manter-outros` para não mexer nos outros produtos. Sabor sem ❌ que estava zerado
+volta a aparecer. Ajustes do dia a dia (+/− estoque, preço) continuam pelo painel.
+
 ---
 
 ## 🔥 Troubleshooting Rápido

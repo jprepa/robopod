@@ -1,0 +1,182 @@
+{% extends 'painel/base.html' %}
+{% block titulo %}Venda manual{% endblock %}
+{% block estilo %}
+input[type=tel], input[type=datetime-local] {
+  font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 10px; width: 100%;
+}
+#itens td { vertical-align: top; }
+#itens td:first-child { width: 100%; }
+#itens select { min-width: 180px; }
+.in-qtd { width: 64px !important; text-align: center; }
+.in-preco { width: 84px !important; font-variant-numeric: tabular-nums; }
+@media (max-width: 1100px) { .grade.g-3-1 { grid-template-columns: 1fr; } }
+.dica { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.dica.alerta { color: var(--bad); }
+.totais { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; margin-top: 12px; font-variant-numeric: tabular-nums; }
+.totais .total { font-weight: 650; font-size: 16px; }
+.lado .campo + .campo { margin-top: 12px; }
+{% endblock %}
+{% block conteudo %}
+<div class="topo">
+  <h1>Venda manual</h1>
+  <a class="btn" href="{% url 'painel:pedidos' %}">← Pedidos</a>
+</div>
+<p class="muted" style="margin:-8px 0 16px">Para vendas feitas fora do bot (balcão, ligação, WhatsApp pessoal). Os itens saem do estoque e a venda entra no dashboard. Cancelar o pedido depois devolve o estoque.</p>
+
+<form method="post" id="form-venda">
+  {% csrf_token %}
+  <div class="grade g-3-1">
+    <section class="cartao tabela-wrap">
+      <h2>Itens</h2>
+      <table id="itens">
+        <thead><tr><th>Produto</th><th class="num">Qtd.</th><th>Unit. (R$)</th><th class="num">Total</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div style="margin-top:10px"><button class="btn peq" type="button" id="add-item">+ Adicionar item</button></div>
+      <div class="totais">
+        <span class="muted">Subtotal</span><span id="t-subtotal">R$ 0,00</span>
+        <span class="muted">Frete</span><span id="t-frete">R$ 0,00</span>
+        <span class="total">Total</span><span class="total" id="t-total">R$ 0,00</span>
+      </div>
+    </section>
+
+    <section class="cartao lado" style="align-self:start">
+      <h2>Venda</h2>
+      <div class="campo">
+        <label for="quando">Data e hora</label>
+        <input type="datetime-local" id="quando" name="quando" value="{{ dados.quando }}" required>
+      </div>
+      <div class="campo">
+        <label for="status">Status</label>
+        <select id="status" name="status">
+          {% for valor, rotulo in status_opcoes %}<option value="{{ valor }}" {% if valor == dados.status %}selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+        </select>
+        <div class="ajuda">“Aguardando pagamento” não entra no faturamento até ser marcada como paga.</div>
+      </div>
+      <div class="campo">
+        <label for="frete">Frete (R$)</label>
+        <input type="text" inputmode="decimal" id="frete" name="frete" value="{{ dados.frete }}" placeholder="0,00">
+      </div>
+      <div class="campo">
+        <label for="telefone">Telefone do cliente <span class="muted">(opcional)</span></label>
+        <input type="tel" id="telefone" name="telefone" value="{{ dados.telefone }}" placeholder="(11) 98888-7777">
+        <div class="ajuda">Liga a venda ao histórico do cliente. Em branco = balcão.</div>
+      </div>
+      <div class="campo">
+        <label for="nome">Nome do cliente <span class="muted">(opcional)</span></label>
+        <input type="text" id="nome" name="nome" value="{{ dados.nome }}" maxlength="120">
+      </div>
+      <div class="campo">
+        <label for="observacoes">Observações</label>
+        <textarea id="observacoes" name="observacoes" rows="3" placeholder="Ex.: pago em dinheiro">{{ dados.observacoes }}</textarea>
+      </div>
+      <div style="margin-top:16px"><button class="btn primario" type="submit">Lançar venda</button></div>
+    </section>
+  </div>
+</form>
+
+<template id="linha-item">
+  <tr>
+    <td><select name="item" aria-label="Produto" required></select><div class="dica"></div></td>
+    <td class="num"><input class="in-qtd" type="number" name="qtd" min="1" value="1" aria-label="Quantidade" required></td>
+    <td><input class="in-preco" type="text" inputmode="decimal" name="preco" aria-label="Preço unitário"></td>
+    <td class="num t-linha">R$ 0,00</td>
+    <td class="num"><button class="btn peq perigo remover" type="button" aria-label="Remover item">✕</button></td>
+  </tr>
+</template>
+{{ opcoes|json_script:"opcoes-venda" }}
+{{ dados.itens|json_script:"itens-venda" }}
+{% endblock %}
+{% block script %}
+<script>
+(function () {
+  const grupos = JSON.parse(document.getElementById('opcoes-venda').textContent);
+  const iniciais = JSON.parse(document.getElementById('itens-venda').textContent);
+  const porId = {};
+  for (const g of grupos) for (const i of g.itens) porId[i.id] = i;
+
+  const corpo = document.querySelector('#itens tbody');
+  const modelo = document.getElementById('linha-item');
+  const frete = document.getElementById('frete');
+  const brl = v => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const numero = t => { const n = parseFloat(String(t).replace(',', '.')); return isFinite(n) ? n : 0; };
+  const precoTexto = p => numero(p).toFixed(2).replace('.', ',');
+
+  function preencherSelect(sel) {
+    sel.add(new Option('Escolha o produto…', ''));
+    for (const g of grupos) {
+      const og = document.createElement('optgroup');
+      og.label = g.titulo;
+      for (const i of g.itens) {
+        const est = i.estoque === null ? '' : ` · estoque ${i.estoque}`;
+        og.appendChild(new Option(`${i.nome}${est}${i.oculto ? ' (oculto)' : ''}`, i.id));
+      }
+      sel.appendChild(og);
+    }
+  }
+
+  function atualizarLinha(tr) {
+    const item = porId[tr.querySelector('select').value];
+    const qtd = parseInt(tr.querySelector('.in-qtd').value, 10) || 0;
+    const dica = tr.querySelector('.dica');
+    dica.classList.remove('alerta');
+    if (!item) dica.textContent = '';
+    else if (item.estoque === null) dica.textContent = 'Não controla estoque';
+    else {
+      const resta = item.estoque - qtd;
+      dica.textContent = `Estoque: ${item.estoque} → ${resta}`;
+      if (resta < 0) { dica.textContent += ' (vai ficar negativo)'; dica.classList.add('alerta'); }
+    }
+    const preco = tr.querySelector('.in-preco');
+    const unit = preco.value.trim() ? numero(preco.value) : (item ? numero(item.preco) : 0);
+    tr.querySelector('.t-linha').textContent = brl(unit * qtd);
+    return unit * qtd;
+  }
+
+  function recalcular() {
+    let subtotal = 0;
+    for (const tr of corpo.rows) subtotal += atualizarLinha(tr);
+    const f = numero(frete.value);
+    document.getElementById('t-subtotal').textContent = brl(subtotal);
+    document.getElementById('t-frete').textContent = brl(f);
+    document.getElementById('t-total').textContent = brl(subtotal + f);
+  }
+
+  function novaLinha(dado) {
+    const tr = modelo.content.firstElementChild.cloneNode(true);
+    const sel = tr.querySelector('select');
+    const preco = tr.querySelector('.in-preco');
+    preencherSelect(sel);
+    if (dado) {
+      sel.value = dado.id;
+      tr.querySelector('.in-qtd').value = dado.qtd || 1;
+      preco.value = dado.preco || '';
+    }
+    // Ao trocar o produto, sugere o preço de tabela (dá para editar: desconto etc.)
+    sel.addEventListener('change', () => {
+      const item = porId[sel.value];
+      preco.value = item ? precoTexto(item.preco) : '';
+      recalcular();
+    });
+    tr.addEventListener('input', recalcular);
+    tr.querySelector('.remover').addEventListener('click', () => {
+      tr.remove();
+      if (!corpo.rows.length) novaLinha();
+      recalcular();
+    });
+    corpo.appendChild(tr);
+    return tr;
+  }
+
+  document.getElementById('add-item').addEventListener('click', () => {
+    novaLinha().querySelector('select').focus();
+    recalcular();
+  });
+  frete.addEventListener('input', recalcular);
+
+  if (iniciais.length) iniciais.forEach(novaLinha); else novaLinha();
+  recalcular();
+})();
+</script>
+{% endblock %}
