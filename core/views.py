@@ -18,7 +18,7 @@ from django.views.decorators.http import require_POST
 
 from .models import SessaoChat
 from .llm_service import (
-    processar_mensagem, gerar_menu_texto,
+    processar_mensagem, gerar_menu_texto, gerar_sabores_texto, localizar_item,
     gerar_secoes_lista, gerar_secoes_categoria, gerar_secoes_variantes,
     buscar_item, buscar_categoria, item_tem_variantes, formatar_preco,
 )
@@ -234,7 +234,16 @@ async def _handler_selecao_lista(sessao: SessaoChat, row_id: str) -> None:
     if item.get('imagem_url'):
         await enviar_imagem_whatsapp(sessao.telefone, item['imagem_url'], legenda)
 
-    if item_tem_variantes(row_id):
+    if len(item['variantes']) > 10:
+        # A lista do WhatsApp corta em 10 linhas: manda os sabores em texto
+        # e o cliente responde escrevendo o sabor (segue pela IA).
+        await enviar_whatsapp(sessao.telefone, gerar_sabores_texto(item))
+        sessao.historico_mensagens.append({
+            'role': 'assistant',
+            'content': f"[Sabores de {item['nome']} enviados ao cliente]",
+        })
+        await sessao.asave(update_fields=['historico_mensagens'])
+    elif item_tem_variantes(row_id):
         await enviar_lista_whatsapp(
             sessao.telefone,
             titulo=item['nome'],
@@ -332,6 +341,21 @@ async def _handler_atendimento_llm(
             update_fields=['historico_mensagens', 'ultima_interacao'],
         )
         await _enviar_cardapio(sessao.telefone)
+
+    elif resultado.tipo == 'mostrar_sabores':
+        await sessao.asave(
+            update_fields=['historico_mensagens', 'ultima_interacao'],
+        )
+        itens = [localizar_item(m) for m in resultado.dados.get('modelos', [])]
+        itens = list({i['id']: i for i in itens if i}.values())  # sem repetidos
+        if not itens:
+            await enviar_whatsapp(
+                sessao.telefone,
+                '😕 Não achei esse modelo no cardápio. Pode me dizer o nome ou o número dele?',
+            )
+            return
+        for item in itens:
+            await enviar_whatsapp(sessao.telefone, gerar_sabores_texto(item))
 
     elif resultado.tipo == 'fechar_pedido':
         itens = resultado.dados.get('itens', [])

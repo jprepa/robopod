@@ -10,7 +10,11 @@ Modos (FRETE_MODO no .env):
 
     - uber_scraper: scraper antigo de m.uber.com (exige login; não funciona na VPS).
 
-Em todos os modos o valor recebe FRETE_MARGEM_PERCENTUAL e é arredondado para
+Antes de qualquer modo, se o bairro do cliente estiver em FRETE_POR_BAIRRO, vale
+o valor fixo da tabela (sem margem). O bairro vem do mapa ou, se o mapa não
+disser, de um trecho do endereço digitado.
+
+Nos modos acima o valor recebe FRETE_MARGEM_PERCENTUAL e é arredondado para
 cima em R$ 0,50.
 
 O endereço do cliente é localizado UMA vez (com viés para a região da loja e,
@@ -62,6 +66,11 @@ _TIPOS_IMPRECISOS_OSM = {
     'municipality', 'city', 'town', 'postcode',
 }
 
+# Onde cada provedor informa o bairro, do mais para o menos confiável
+_TIPOS_BAIRRO_GOOGLE = ('sublocality_level_1', 'sublocality', 'neighborhood')
+_CHAVES_BAIRRO_OSM = ('suburb', 'neighbourhood', 'quarter', 'city_district')
+_CHAVES_CIDADE_OSM = ('city', 'town', 'municipality')
+
 # Motivos de falha (o bot decide o que dizer ao cliente a partir deles)
 NAO_ENCONTRADO = 'nao_encontrado'
 FORA_AREA = 'fora_area'
@@ -73,6 +82,8 @@ class Local:
     lat: float
     lng: float
     endereco_formatado: str
+    bairro: str = ''
+    cidade: str = ''
 
     @property
     def coords(self) -> tuple[float, float]:
@@ -228,8 +239,20 @@ async def _geocodificar_google(
             f'Endereço impreciso (só achou "{resultado.get("formatted_address")}")',
             NAO_ENCONTRADO,
         )
+    componentes = {
+        tipo: c.get('long_name', '')
+        for c in reversed(resultado.get('address_components', []))
+        for tipo in c.get('types', [])
+    }
+    bairro = next(
+        (componentes[t] for t in _TIPOS_BAIRRO_GOOGLE if componentes.get(t)), '',
+    )
+    cidade = componentes.get('locality') or componentes.get('administrative_area_level_2', '')
     local = resultado['geometry']['location']
-    return Local(local['lat'], local['lng'], _encurtar(resultado.get('formatted_address', endereco)))
+    return Local(
+        local['lat'], local['lng'],
+        _encurtar(resultado.get('formatted_address', endereco)), bairro, cidade,
+    )
 
 
 async def _distancia_google(client: httpx.AsyncClient, origem: Local, destino: Local) -> float:
@@ -280,7 +303,7 @@ async def _geocodificar_osm(
     """Tenta o endereço completo e depois sem número/CEP, já que muitos
     números de casa não estão mapeados no OSM. Com `perto_de`, só aceita
     resultados na região da loja."""
-    params = {'format': 'jsonv2', 'countrycodes': 'br', 'limit': 1}
+    params = {'format': 'jsonv2', 'countrycodes': 'br', 'limit': 1, 'addressdetails': 1}
     if perto_de:
         lat, lon = perto_de
         r = _raio_graus()
@@ -296,7 +319,13 @@ async def _geocodificar_osm(
         resultados = await _nominatim(client, {**params, 'q': consulta})
         if resultados and resultados[0].get('addresstype') not in _TIPOS_IMPRECISOS_OSM:
             r0 = resultados[0]
-            return Local(float(r0['lat']), float(r0['lon']), _encurtar(r0.get('display_name', consulta)))
+            detalhes = r0.get('address') or {}
+            bairro = next((detalhes[k] for k in _CHAVES_BAIRRO_OSM if detalhes.get(k)), '')
+            cidade = next((detalhes[k] for k in _CHAVES_CIDADE_OSM if detalhes.get(k)), '')
+            return Local(
+                float(r0['lat']), float(r0['lon']),
+                _encurtar(r0.get('display_name', consulta)), bairro, cidade,
+            )
 
     raise FreteErro(f'Endereço não encontrado no mapa: {endereco}', NAO_ENCONTRADO)
 
@@ -417,6 +446,50 @@ async def _localizar(endereco_cliente: str) -> tuple[Local, Local] | dict:
         return _resultado_falha('Erro no serviço de mapas ao localizar o endereço.')
 
 
+# ── Valor fixo por bairro ──
+
+
+def _tabela_bairros() -> dict[str, tuple[str, float]]:
+    """Nome normalizado -> (nome como na tabela, valor)."""
+    return {
+        _normalizar(nome): (nome, float(valor))
+        for nome, valor in settings.FRETE_POR_BAIRRO.items()
+    }
+
+
+def frete_por_bairro(endereco_cliente: str, cliente: Local) -> dict | None:
+    """Resultado com o valor fixo do bairro, ou None se não estiver na tabela.
+
+    Usa o bairro informado pelo mapa e, se ele não estiver na tabela, os trechos
+    do endereço digitado ("Rua X, 10 - Leblon, Rio" -> "Leblon"). A tabela vale
+    mesmo acima de FRETE_DISTANCIA_MAXIMA_KM, mas só na cidade da loja, para um
+    "Centro" de outra cidade não pegar o preço do Centro do Rio.
+    """
+    tabela = _tabela_bairros()
+    if not tabela:
+        return None
+    cidade_loja = _normalizar(_cidade_padrao().split(' - ')[0])
+    if cidade_loja and cliente.cidade and _normalizar(cliente.cidade) != cidade_loja:
+        return None
+
+    trechos = [cliente.bairro, *re.split(r'\s*(?:,|\s-\s|/)\s*', endereco_cliente)]
+    for trecho in trechos:
+        if (achado := tabela.get(_normalizar(trecho))) is None:
+            continue
+        nome, valor = achado
+        logger.info('Frete fixo do bairro %s: R$ %.2f', nome, valor)
+        return {
+            'sucesso': True,
+            'valor_frete': valor,
+            'distancia_km': None,
+            'endereco_formatado': cliente.endereco_formatado,
+            'fornecedor': 'bairro',
+            'bairro': nome,
+            'mensagem': f'entrega moto, {nome}',
+        }
+    return None
+
+
 # ── Estimativa por distância ──
 
 
@@ -516,6 +589,9 @@ async def cotar_frete(endereco_cliente: str) -> dict:
     locais = await _localizar(endereco_cliente)
     if isinstance(locais, dict):
         return locais
+
+    if fixo := frete_por_bairro(endereco_cliente, locais[1]):
+        return fixo
 
     if settings.FRETE_MODO == 'lalamove':
         resultado = await cotar_frete_lalamove(endereco_cliente, locais)

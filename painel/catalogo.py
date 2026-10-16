@@ -114,6 +114,28 @@ def _similaridade(a: str, b: str) -> float:
     return max(difflib.SequenceMatcher(None, x, y).ratio() for x, y in pares)
 
 
+def localizar_item(referencia: str, itens: list[dict]) -> dict | None:
+    """Acha o item do cardápio (dicts de `atual()`) mais parecido com o texto.
+
+    Aceita o nome completo ou só parte dele ("V35", "elfbar 15k"): quando a
+    referência aparece inteira no nome do item, ele tem prioridade.
+    """
+    alvo = _normalizar(referencia)
+    if not alvo:
+        return None
+    contem = [
+        i for i in itens
+        if re.search(rf'(?<!\w){re.escape(alvo)}(?!\w)', _normalizar(i['nome']))
+    ]
+    candidatos, minimo = (contem, 0.0) if contem else (itens, _SIMILARIDADE_MINIMA)
+    melhor, melhor_nota = None, minimo
+    for item in candidatos:
+        nota = _similaridade(referencia, item['nome'])
+        if nota >= melhor_nota:
+            melhor, melhor_nota = item, nota
+    return melhor
+
+
 def _localizar(nome: str, produtos: list[Produto]) -> tuple[Produto, Variante | None] | None:
     melhor, melhor_nota = None, _SIMILARIDADE_MINIMA
     for p in produtos:

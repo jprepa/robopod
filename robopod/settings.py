@@ -110,6 +110,22 @@ FRETE_MARGEM_PERCENTUAL = float(os.getenv('FRETE_MARGEM_PERCENTUAL', '0'))
 FRETE_DISTANCIA_MAXIMA_KM = float(os.getenv('FRETE_DISTANCIA_MAXIMA_KM', '20'))
 # Cidade anexada a endereços sem cidade ("Rio de Janeiro - RJ"); vazio = fim de ENDERECO_LOJA
 FRETE_CIDADE_PADRAO = os.getenv('FRETE_CIDADE_PADRAO', '')
+# Frete fixo por bairro (R$). Tem prioridade sobre Lalamove/estimativa; bairros
+# fora da lista seguem o FRETE_MODO. Acentos e maiúsculas não importam.
+FRETE_POR_BAIRRO = {
+    'Barra Olímpica': 10,
+    'Barra': 10,
+    'Barra da Tijuca': 10,
+    'Recreio': 15,
+    'Recreio dos Bandeirantes': 15,
+    'São Conrado': 15,
+    'Leblon': 20,
+    'Ipanema': 25,
+    'Copacabana': 25,
+    'Botafogo': 25,
+    'Tijuca': 25,
+    'Centro': 30,
+}
 
 # ── Cardápio no WhatsApp ──
 # Listas/botões interativos muitas vezes NÃO aparecem com a Evolution em modo

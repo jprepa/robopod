@@ -43,12 +43,16 @@ def formatar_preco(valor: float) -> str:
     return f"R$ {valor:,.2f}".replace(',', '_').replace('.', ',').replace('_', '.')
 
 
-def gerar_menu_texto() -> str:
+def gerar_menu_texto(com_sabores: bool = False) -> str:
     """Gera o cardápio formatado para WhatsApp (negrito/itálico) e para o prompt.
 
     Os itens são numerados em sequência para que o cliente possa pedir
-    pelo número ("quero o 3") — o mesmo texto vai no system prompt, então
+    pelo número ("quero o 3") — a mesma numeração vai no system prompt, então
     a IA sabe a qual item cada número corresponde.
+
+    Para o cliente vai só modelo + preço (com muitos sabores a mensagem fica
+    ilegível); os sabores são enviados depois, por modelo (`gerar_sabores_texto`).
+    O system prompt usa `com_sabores=True` para a IA conhecer as opções.
     """
     linhas: list[str] = [
         '📋 *CARDÁPIO ROBOPOD*',
@@ -57,35 +61,65 @@ def gerar_menu_texto() -> str:
     ]
 
     numero = 1
-    exemplo = ''
+    tem_sabores = False
     for categoria in _categorias():
         linhas.append(f"{categoria['emoji']} *{categoria['nome'].upper()}*".strip())
 
         for item in categoria['itens']:
             linhas.append(f"{numero}. {item['nome']} — *{formatar_preco(item['preco'])}*")
             if item['variantes']:
-                nomes_var = ', '.join(v['nome'] for v in item['variantes'])
-                linhas.append(f'    ↳ _{nomes_var}_')
-            if not exemplo:
-                exemplo = _exemplo_pedido(item)
+                tem_sabores = True
+                if com_sabores:
+                    nomes_var = ', '.join(v['nome'] for v in item['variantes'])
+                    linhas.append(f'    ↳ _{nomes_var}_')
             numero += 1
 
         linhas.append('')  # linha em branco entre categorias
 
     linhas.append('━━━━━━━━━━━━━━━')
-    linhas.append('👉 Para pedir, é só escrever o que deseja ou o número do item.')
-    if exemplo:
-        linhas.append(f'_Ex.: "{exemplo}"_')
+    if tem_sabores:
+        linhas.append('Me fala qual modelo você quer que eu te mando os sabores disponíveis =)')
+    else:
+        linhas.append('👉 Para pedir, é só escrever o que deseja ou o número do item.')
     return '\n'.join(linhas)
 
 
-def _exemplo_pedido(item: dict) -> str:
-    """'1 Ignite V35 Cherry Ice' a partir do primeiro item do cardápio."""
-    nome = re.sub(r'\s*\([^)]*\)', '', item['nome']).strip()
+def _titulo_item(nome: str) -> str:
+    """'Ignite V35 (3.500 puffs)' -> 'Ignite V35 - 3.500 Puffs'."""
+    def _detalhe(m: re.Match) -> str:
+        detalhe = m.group(1).strip()
+        return f' - {detalhe[:1].upper()}{detalhe[1:]}'.replace(' puffs', ' Puffs')
+    return re.sub(r'\s*\(([^)]*)\)', _detalhe, nome).strip()
+
+
+def gerar_sabores_texto(item: dict) -> str:
+    """Mensagem com os sabores disponíveis de um modelo:
+
+        *Ignite V35 - 3.500 Puffs*
+        R$ 90,00
+
+        Blue Raspberry Ice 🫐🟣🧊
+        Cherry Ice 🍒🧊
+    """
+    linhas = [f"*{_titulo_item(item['nome'])}*", formatar_preco(item['preco'])]
     if item['variantes']:
-        sabor = re.sub(r'[^\w\s\'-]', '', item['variantes'][0]['nome']).strip()
-        nome = f'{nome} {sabor}'
-    return f'1 {nome}'
+        linhas.append('')
+        linhas.extend(v['nome'] for v in item['variantes'])
+        linhas.extend(['', '_Qual sabor vai ser?_ 😋'])
+    else:
+        linhas.extend(['', '_Quer adicionar ao pedido?_'])
+    return '\n'.join(linhas)
+
+
+def localizar_item(referencia: str) -> dict | None:
+    """Acha um item pelo número do cardápio ("3") ou pelo nome (aproximado)."""
+    itens = [item for categoria in _categorias() for item in categoria['itens']]
+    referencia = str(referencia).strip()
+    numero = re.fullmatch(r'#?(\d+)', referencia)
+    if numero:
+        indice = int(numero.group(1)) - 1
+        return itens[indice] if 0 <= indice < len(itens) else None
+    return catalogo.localizar_item(referencia, itens)
 
 
 # Limites da mensagem de lista do WhatsApp — acima disso a lista é rejeitada
@@ -220,18 +254,19 @@ REGRAS INVIOLÁVEIS:
 8. Quando o cliente confirmar que quer finalizar o pedido, use a ferramenta `fechar_pedido` com os itens e quantidades corretos.
 9. Sempre confirme o pedido com o cliente ANTES de chamar `fechar_pedido`.
 10. Horário de funcionamento: 18h às 03h. Fora desse horário, informe que estamos fechados.
-11. Se o cliente pedir o cardápio, o menu, os preços ou perguntar o que tem disponível, use a ferramenta `mostrar_cardapio` em vez de escrever o cardápio você mesmo.
+11. Se o cliente pedir o cardápio, o menu, os preços ou perguntar o que tem disponível, use a ferramenta `mostrar_cardapio` em vez de escrever o cardápio você mesmo. O cardápio enviado ao cliente mostra só os modelos e preços, SEM os sabores.
 12. Os itens do cardápio são numerados. Se o cliente pedir pelo número (ex.: "quero o 3"), use o item correspondente.
-13. Se o item escolhido tiver sabores/opções e o cliente não disser qual, pergunte antes de seguir. No `fechar_pedido`, inclua a opção no nome (ex.: "Essência Premium (50g) - Menta").
+13. Quando o cliente escolher um modelo que tem sabores sem dizer qual sabor (ex.: "quero o V35", "o 2"), ou perguntar quais sabores um modelo tem, use a ferramenta `mostrar_sabores` em vez de listar os sabores você mesmo.
+14. Se o cliente já disser o modelo e o sabor (ex.: "1 Ignite V35 Cherry Ice"), NÃO use `mostrar_sabores`: siga com o pedido. No `fechar_pedido`, inclua o sabor no nome (ex.: "Ignite V35 (3.500 puffs) - Cherry Ice 🍒🧊").
 
-CARDÁPIO:
+CARDÁPIO (com os sabores, só para sua referência):
 {cardapio}
 """
 
 
 def gerar_system_prompt() -> str:
     """System prompt com o cardápio atual (muda quando o painel edita o estoque)."""
-    return _SYSTEM_PROMPT.format(cardapio=gerar_menu_texto())
+    return _SYSTEM_PROMPT.format(cardapio=gerar_menu_texto(com_sabores=True))
 
 # ── Definição das Tools (Function Calling) ──
 TOOLS = [
@@ -308,6 +343,32 @@ TOOLS = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "mostrar_sabores",
+            "description": (
+                "Envia ao cliente os sabores disponíveis de um ou mais modelos, "
+                "com o preço. Chamada quando o cliente escolhe um modelo sem "
+                "dizer o sabor ou pergunta quais sabores um modelo tem."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "modelos": {
+                        "type": "array",
+                        "description": (
+                            "Modelos escolhidos: o nome exatamente como no cardápio "
+                            "(ex.: \"Ignite V35 (3.500 puffs)\") ou o número do item (ex.: \"1\")"
+                        ),
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                    },
+                },
+                "required": ["modelos"],
+            },
+        },
+    },
 ]
 
 
@@ -317,7 +378,7 @@ class LLMResult:
 
     def __init__(
         self,
-        tipo: str,  # 'texto' | 'fechar_pedido' | 'solicitar_humano' | 'mostrar_cardapio'
+        tipo: str,  # 'texto' | 'fechar_pedido' | 'solicitar_humano' | 'mostrar_cardapio' | 'mostrar_sabores'
         conteudo: str = '',
         dados: dict[str, Any] | None = None,
     ):
@@ -422,6 +483,7 @@ async def processar_mensagem(
             'fechar_pedido': 'Pedido fechado com sucesso!',
             'solicitar_humano': 'Transferindo para atendente humano.',
             'mostrar_cardapio': 'Cardápio enviado ao cliente.',
+            'mostrar_sabores': 'Sabores enviados ao cliente; aguarde ele escolher.',
         }
 
         # Adiciona a mensagem do assistente com tool_calls ao histórico,

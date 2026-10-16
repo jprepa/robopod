@@ -17,7 +17,7 @@
           <tr><td>{{ i.nome }}{% if not i.produto_id %} <span class="muted peq">(fora do catálogo)</span>{% endif %}</td><td class="num">{{ i.quantidade }}</td><td class="num">{{ i.preco_unitario|brl }}</td><td class="num">{{ i.total|brl }}</td></tr>
         {% endfor %}
           <tr><td colspan="3" class="muted">Subtotal</td><td class="num">{{ pedido.subtotal|brl }}</td></tr>
-          <tr><td colspan="3" class="muted">Frete{% if pedido.distancia_km %} ({{ pedido.distancia_km|floatformat:1 }} km{% if pedido.frete_fornecedor %}, {{ pedido.frete_fornecedor }}{% endif %}){% endif %}</td><td class="num">{{ pedido.frete|brl }}</td></tr>
+          <tr><td colspan="3" class="muted">Frete{% if pedido.distancia_km %} ({{ pedido.distancia_km|floatformat:1 }} km{% if pedido.frete_fornecedor %}, {{ pedido.frete_fornecedor }}{% endif %}){% elif pedido.frete_fornecedor %} ({{ pedido.frete_fornecedor }}){% endif %}</td><td class="num">{{ pedido.frete|brl }}</td></tr>
           <tr><td colspan="3"><b>Total</b></td><td class="num"><b>{{ pedido.total|brl }}</b></td></tr>
         </tbody>
       </table>
