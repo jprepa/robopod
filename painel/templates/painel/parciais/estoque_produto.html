@@ -2,36 +2,36 @@
 <tbody id="produto-{{ p.pk }}" class="{% if not p.ativo %}inativo{% endif %}">
 {% with variantes=p.variantes.all %}
   <tr class="linha-produto">
-    <td>
+    <td class="c-nome">
       <a href="{% url 'painel:produto_editar' p.pk %}"><b>{{ p.nome }}</b></a>
       {% if p.descricao %}<div class="muted peq">{{ p.descricao }}</div>{% endif %}
     </td>
-    <td>
+    <td class="c-preco">
       <input class="in-preco" type="text" inputmode="decimal" name="preco" value="{{ p.preco|stringformat:'.2f' }}" aria-label="Preço de {{ p.nome }}"
              hx-post="{% url 'painel:estoque_ajustar' 'produto' p.pk %}" hx-trigger="change" hx-target="#produto-{{ p.pk }}" hx-swap="outerHTML">
     </td>
-    <td>
+    <td class="c-estoque">
       {% if variantes %}
-        <span class="muted peq">por opção ↓</span>
+        <span class="muted peq">estoque por opção ↓</span>
       {% else %}
         {% include 'painel/parciais/estoque_controle.html' with tipo='produto' obj=p minimo=p.estoque_minimo %}
       {% endif %}
     </td>
-    <td>
+    <td class="c-cardapio">
       <button class="btn peq {% if p.ativo %}{% else %}perigo{% endif %}" hx-post="{% url 'painel:estoque_ajustar' 'produto' p.pk %}" hx-vals='{"alternar_ativo": "1"}' hx-target="#produto-{{ p.pk }}" hx-swap="outerHTML"
               title="{% if p.ativo %}Visível no cardápio — clique para ocultar{% else %}Oculto do cardápio — clique para mostrar{% endif %}">{% if p.ativo %}No cardápio{% else %}Oculto{% endif %}</button>
     </td>
-    <td class="num"><a class="btn peq" href="{% url 'painel:produto_editar' p.pk %}">Editar</a></td>
+    <td class="num c-acoes"><a class="btn peq" href="{% url 'painel:produto_editar' p.pk %}">Editar</a></td>
   </tr>
   {% for v in variantes %}
   <tr class="linha-variante{% if not v.ativo %} inativo{% endif %}">
-    <td class="recuo">↳ {{ v.nome }}</td>
-    <td></td>
-    <td>{% include 'painel/parciais/estoque_controle.html' with tipo='variante' obj=v minimo=p.estoque_minimo %}</td>
-    <td>
+    <td class="recuo c-nome">↳ {{ v.nome }}</td>
+    <td class="c-vazio"></td>
+    <td class="c-estoque">{% include 'painel/parciais/estoque_controle.html' with tipo='variante' obj=v minimo=p.estoque_minimo %}</td>
+    <td class="c-cardapio">
       <button class="btn peq {% if not v.ativo %}perigo{% endif %}" hx-post="{% url 'painel:estoque_ajustar' 'variante' v.pk %}" hx-vals='{"alternar_ativo": "1"}' hx-target="#produto-{{ p.pk }}" hx-swap="outerHTML">{% if v.ativo %}Ativa{% else %}Oculta{% endif %}</button>
     </td>
-    <td></td>
+    <td class="c-vazio"></td>
   </tr>
   {% endfor %}
 {% endwith %}

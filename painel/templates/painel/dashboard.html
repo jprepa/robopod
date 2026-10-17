@@ -15,6 +15,17 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 13px; margin
 .alerta b { font-variant-numeric: tabular-nums; }
 .ponto { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); display: inline-block; }
 .ponto.aviso { background: var(--warn); }
+.grafico.baixo { height: 220px; }
+.g-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 1200px) { .g-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .g-3 > :first-child { grid-column: 1 / -1; } }
+@media (max-width: 900px) { .g-3 { grid-template-columns: 1fr; } }
+.ranking { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.ranking li.compacto { gap: 2px; }
+.ranking li { display: grid; gap: 4px; }
+.ranking .linha { display: flex; justify-content: space-between; gap: 10px; }
+.ranking .linha > :last-child { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.trilho { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.trilho span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
 {% endblock %}
 {% block conteudo %}
 <div class="topo">
@@ -88,16 +99,54 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 13px; margin
       {% else %}<div class="muted">Nenhuma venda paga no período.</div>{% endif %}
     </section>
     <section class="cartao">
-      <h2>Estoque baixo</h2>
-      {% if estoque_baixo %}
+      <h2>Melhores clientes ({{ dias }} dias)</h2>
+      {% if melhores_clientes %}
       <ul class="lista-simples">
-        {% for e in estoque_baixo %}<li><a href="{% url 'painel:produto_editar' e.pk %}">{{ e.nome }}</a><span class="tag {% if e.estoque <= 0 %}cancelado{% else %}aguardando_pagamento{% endif %}">{% if e.estoque <= 0 %}esgotado{% else %}{{ e.estoque }} un.{% endif %}</span></li>{% endfor %}
+        {% for c in melhores_clientes %}<li><a href="{% url 'painel:cliente' c.cliente.pk %}">{{ c.cliente.nome_exibicao }}</a><span class="muted">{{ c.pedidos }} ped. · {{ c.total|brl }}</span></li>{% endfor %}
       </ul>
-      {% else %}<div class="muted">Nada abaixo do mínimo.</div>{% endif %}
+      {% else %}<div class="muted">Nenhuma venda paga no período.</div>{% endif %}
     </section>
   </div>
 </div>
+
+<div class="grade g-3" style="margin-top:16px">
+  <section class="cartao">
+    <h2>Vendas por hora <span class="muted peq">(pedidos pagos em {{ dias }} dias)</span></h2>
+    <div class="grafico baixo"><canvas id="grafico-horas" role="img" aria-label="Pedidos pagos por hora do dia"></canvas></div>
+    {% if pico_hora %}<div class="muted peq" style="margin-top:6px">Horário de pico: <b>{{ pico_hora.rotulo }}</b> · {{ pico_hora.pedidos }} pedido{{ pico_hora.pedidos|pluralize }} · {{ pico_hora.total|brl }}</div>{% endif %}
+  </section>
+
+  <section class="cartao">
+    <h2>Vendas por vendedor <span class="muted peq">({{ dias }} dias)</span></h2>
+    {% if por_vendedor %}
+    <ul class="ranking">
+      {% for v in por_vendedor %}
+      <li>
+        <div class="linha"><b>{{ v.nome }}</b><span>{{ v.total|brl }}</span></div>
+        <div class="trilho" aria-hidden="true"><span style="width: {{ v.parcela|floatformat:0 }}%"></span></div>
+        <div class="muted peq">{{ v.pedidos }} pedido{{ v.pedidos|pluralize }} · ticket {{ v.ticket|brl }} · {{ v.parcela|floatformat:0 }}% do faturamento</div>
+      </li>
+      {% endfor %}
+    </ul>
+    <div class="muted peq" style="margin-top:8px">Vendas manuais contam para quem lançou no painel.</div>
+    {% else %}<div class="muted">Nenhuma venda paga no período.</div>{% endif %}
+  </section>
+
+  <section class="cartao">
+    <h2>Vendas por dia da semana <span class="muted peq">({{ dias }} dias)</span></h2>
+    <ul class="ranking">
+      {% for d in por_dia_semana %}
+      <li class="compacto">
+        <div class="linha"><span>{{ d.dia }}</span><span>{{ d.total|brl }}</span></div>
+        <div class="trilho" aria-hidden="true"><span style="width: {{ d.largura }}%"></span></div>
+        <div class="muted peq">{{ d.pedidos }} pedido{{ d.pedidos|pluralize }}{% if d.pedidos %} · média de {{ d.media|brl }} por noite{% endif %}</div>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+</div>
 {{ serie|json_script:"dados-serie" }}
+{{ por_hora|json_script:"dados-horas" }}
 {% endblock %}
 
 {% block script %}
@@ -175,7 +224,55 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 13px; margin
     });
   }
 
+  // Pedidos por hora (o tooltip mostra também o faturamento)
+  const horas = JSON.parse(document.getElementById('dados-horas').textContent);
+  const canvasHoras = document.getElementById('grafico-horas');
+  let graficoHoras;
+  function desenharHoras() {
+    if (!window.Chart) return;
+    const css = getComputedStyle(document.documentElement);
+    const cor = n => css.getPropertyValue(n).trim();
+    if (graficoHoras) graficoHoras.destroy();
+    graficoHoras = new Chart(canvasHoras, {
+      type: 'bar',
+      data: {
+        labels: horas.map(h => h.rotulo),
+        datasets: [{
+          label: 'Pedidos',
+          data: horas.map(h => h.pedidos),
+          backgroundColor: cor('--accent'),
+          borderRadius: { topLeft: 3, topRight: 3 },
+          borderSkipped: 'start',
+          maxBarThickness: 18,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: cor('--surface'), titleColor: cor('--text'), bodyColor: cor('--text-2'),
+            borderColor: cor('--border'), borderWidth: 1, padding: 10, displayColors: false,
+            callbacks: {
+              label: ctx => {
+                const h = horas[ctx.dataIndex];
+                return [`${h.pedidos} pedido${h.pedidos === 1 ? '' : 's'}`, `Faturamento: ${brl(h.total)}`];
+              },
+            },
+          },
+        },
+        scales: {
+          x: { grid: { display: false }, border: { color: cor('--border') }, ticks: { color: cor('--muted'), maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
+          y: { beginAtZero: true, grid: { color: cor('--border') }, border: { display: false }, ticks: { color: cor('--muted'), precision: 0, maxTicksLimit: 5 } },
+        },
+      },
+    });
+  }
+
   desenhar();
+  desenharHoras();
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', desenharHoras);
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', desenhar);
 })();
 </script>

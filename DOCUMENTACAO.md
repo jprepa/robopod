@@ -153,6 +153,19 @@ O selo **Loja aberta / Loja fechada** abaixo do nome no menu mostra o estado em 
 as telas. Ao **Abrir a loja**, a Início lista quem chamou enquanto estava fechada e
 ainda não teve resposta, para a equipe chamar de volta.
 
+O botão **Pausar bot** deixa o bot em silêncio total: ninguém recebe resposta
+automática, nem a mensagem de loja fechada. As mensagens continuam chegando em
+**Conversas** para a equipe responder pelo painel (o selo do menu fica **Bot pausado**).
+Só o comprovante de pagamento segue sendo registrado, sem resposta ao cliente.
+
+### 3.4.3. Áudios dos clientes
+
+As notas de voz são transcritas pela OpenAI e seguem como se o cliente tivesse
+escrito; no painel aparecem como "🎤 Áudio: …". O modelo é `OPENAI_TRANSCRICAO_MODEL`
+(padrão `gpt-4o-mini-transcribe`; `whisper-1` também funciona). O áudio é baixado da
+Evolution pelo id da mensagem, então não precisa ligar o `webhook_base64`. Se a
+transcrição falhar, o bot pede para o cliente escrever.
+
 ### 3.5. Chave PIX
 
 ```env
@@ -170,6 +183,7 @@ CHAVE_PIX=seu-email@pix.com
 | `DEBUG`               | Não         | `True` para desenvolvimento (padrão: `True`)    |
 | `OPENAI_API_KEY`      | Sim         | Chave da API da OpenAI                          |
 | `OPENAI_MODEL`        | Não         | Modelo a usar (padrão: `gpt-4o-mini`)           |
+| `OPENAI_TRANSCRICAO_MODEL` | Não    | Transcrição de áudios (padrão: `gpt-4o-mini-transcribe`) |
 | `EVOLUTION_API_URL`   | Sim         | URL base da Evolution API                       |
 | `EVOLUTION_API_KEY`   | Sim         | Chave de autenticação da Evolution API          |
 | `EVOLUTION_INSTANCE`  | Sim         | Nome da instância do WhatsApp                   |

@@ -72,6 +72,7 @@ def _somar(qs) -> dict:
 
 
 def _contadores() -> dict:
+    config = Configuracao.obter()
     return {
         'aguardando_atendente': SessaoChat.objects.filter(
             estado_atual=SessaoChat.Estado.ATENDIMENTO_HUMANO,
@@ -79,7 +80,7 @@ def _contadores() -> dict:
         'pedidos_conferir': Pedido.objects.filter(
             status=Pedido.Status.COMPROVANTE_RECEBIDO,
         ).count(),
-        'expediente_aberto': Configuracao.obter().expediente_aberto,
+        **{c: getattr(config, c) for c in ('expediente_aberto', 'bot_pausado')},
     }
 
 
@@ -314,7 +315,7 @@ def inicio(request):
 @login_required
 @require_POST
 def expediente(request):
-    """Abre/encerra o expediente do bot e edita a mensagem de loja fechada."""
+    """Abre/encerra o expediente, pausa o bot e edita a mensagem de loja fechada."""
     config = Configuracao.obter()
     acao = request.POST.get('acao')
     agora = timezone.now()
@@ -334,6 +335,22 @@ def expediente(request):
             alvo=config, mudancas={'expediente_aberto': [False, True]},
         )
         messages.success(request, 'Loja aberta! O bot voltou a atender.')
+    elif acao == 'pausar' and not config.bot_pausado:
+        config.bot_pausado, config.bot_pausado_em = True, agora
+        config.save(update_fields=['bot_pausado', 'bot_pausado_em'])
+        auditoria.registrar(
+            request, Tipo.CONFIGURACAO, 'bot_pausar', 'Pausou o bot (sem nenhuma resposta automática)',
+            alvo=config, mudancas={'bot_pausado': [False, True]},
+        )
+        messages.success(request, 'Bot pausado. Ninguém recebe resposta automática; as mensagens continuam chegando aqui.')
+    elif acao == 'retomar' and config.bot_pausado:
+        config.bot_pausado = False
+        config.save(update_fields=['bot_pausado'])
+        auditoria.registrar(
+            request, Tipo.CONFIGURACAO, 'bot_retomar', 'Retomou o bot',
+            alvo=config, mudancas={'bot_pausado': [True, False]},
+        )
+        messages.success(request, 'Bot retomado.' + ('' if config.expediente_aberto else ' A loja segue fechada: quem chamar recebe a mensagem de loja fechada.'))
     elif acao == 'mensagem':
         antes = {'horario_atendimento': config.horario_atendimento, 'mensagem_fechado': config.mensagem_fechado}
         config.horario_atendimento = request.POST.get('horario_atendimento', '').strip()[:120]
@@ -405,8 +422,8 @@ def dashboard(request):
         .order_by('-receita')[:6]
     )
 
-    estoque_baixo = _estoque_baixo()
-
+    vendas_periodo = faturados.filter(criado_em__gte=inicio_serie)
+    por_hora = _vendas_por_hora(vendas_periodo)
     novos_clientes = Cliente.objects.filter(criado_em__gte=inicio_serie).count()
 
     return _render(request, 'painel/dashboard.html', {
@@ -417,11 +434,86 @@ def dashboard(request):
         'variacao': variacao,
         'serie': serie,
         'top_produtos': top_produtos,
-        'estoque_baixo': estoque_baixo[:8],
+        'por_hora': por_hora,
+        'pico_hora': max(por_hora, key=lambda h: h['pedidos']) if any(h['pedidos'] for h in por_hora) else None,
+        'por_vendedor': _vendas_por_vendedor(vendas_periodo, resumo_periodo['total']),
+        'por_dia_semana': _vendas_por_dia_semana(
+            vendas_periodo, [hoje - timedelta(days=i) for i in range(dias)],
+        ),
+        'melhores_clientes': _melhores_clientes(vendas_periodo),
         'novos_clientes': novos_clientes,
         'pedidos_abertos': Pedido.objects.filter(status__in=_ABERTOS).count(),
         'virada': settings.PAINEL_VIRADA_DIA_HORA,
     })
+
+
+def _vendas_por_hora(vendas) -> list[dict]:
+    """Pedidos pagos e faturamento por hora do dia, na ordem do dia comercial."""
+    por_hora = defaultdict(lambda: {'pedidos': 0, 'total': Decimal('0')})
+    for criado_em, total in vendas.values_list('criado_em', 'total'):
+        h = por_hora[timezone.localtime(criado_em).hour]
+        h['pedidos'] += 1
+        h['total'] += total
+    horas = [(settings.PAINEL_VIRADA_DIA_HORA + i) % 24 for i in range(24)]
+    return [
+        {'hora': h, 'rotulo': f'{h}h', 'pedidos': por_hora[h]['pedidos'], 'total': float(por_hora[h]['total'])}
+        for h in horas
+    ]
+
+
+def _vendas_por_vendedor(vendas, total_periodo: Decimal) -> list[dict]:
+    """Quem vendeu: o bot (pedidos do WhatsApp) e cada usuário que lançou venda manual."""
+    linhas = (
+        vendas.order_by().values('origem', 'vendedor_id', 'vendedor__username', 'vendedor__first_name', 'vendedor__last_name')
+        .annotate(pedidos=Count('id'), total=Sum('total'))
+    )
+    resultado = []
+    for v in linhas:
+        if v['origem'] != Pedido.Origem.MANUAL:
+            nome = '🤖 Bot (WhatsApp)'
+        elif v['vendedor_id']:
+            nome = f"{v['vendedor__first_name']} {v['vendedor__last_name']}".strip() or v['vendedor__username']
+        else:
+            nome = 'Venda manual (sem vendedor)'
+        resultado.append({
+            'nome': nome, 'pedidos': v['pedidos'], 'total': v['total'],
+            'ticket': v['total'] / v['pedidos'],
+            'parcela': float(v['total'] / total_periodo * 100) if total_periodo else 0,
+        })
+    return sorted(resultado, key=lambda r: r['total'], reverse=True)
+
+
+_DIAS_SEMANA = ('Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo')
+
+
+def _vendas_por_dia_semana(vendas, datas: list) -> list[dict]:
+    """Faturamento por dia da semana (pelo dia comercial: 01h de sábado conta na sexta)
+    e a média por noite, contando todas as noites do período, inclusive as sem venda."""
+    total = defaultdict(Decimal)
+    pedidos = defaultdict(int)
+    for criado_em, valor in vendas.values_list('criado_em', 'total'):
+        dia = _dia_comercial(criado_em).weekday()
+        total[dia] += valor
+        pedidos[dia] += 1
+    noites = defaultdict(int)
+    for data in datas:
+        noites[data.weekday()] += 1
+    maximo = max(total.values(), default=Decimal('0')) or Decimal('1')
+    return [
+        {'dia': nome, 'total': total[i], 'pedidos': pedidos[i],
+         'media': total[i] / noites[i] if noites[i] else Decimal('0'),
+         'largura': round(total[i] / maximo * 100)}
+        for i, nome in enumerate(_DIAS_SEMANA)
+    ]
+
+
+def _melhores_clientes(vendas, limite: int = 6) -> list[dict]:
+    linhas = (
+        vendas.filter(cliente__isnull=False).order_by().values('cliente')
+        .annotate(pedidos=Count('id'), total=Sum('total')).order_by('-total')[:limite]
+    )
+    clientes = Cliente.objects.in_bulk([l['cliente'] for l in linhas])
+    return [{**l, 'cliente': clientes[l['cliente']]} for l in linhas if l['cliente'] in clientes]
 
 
 def _estoque_baixo() -> list[dict]:
@@ -548,7 +640,7 @@ def conversa(request, telefone: str):
 
 
 def _resumo_pedido(pedido: Pedido) -> str:
-    linhas = [f'*Pedido #{pedido.pk}*']
+    linhas = ['*Seu pedido*']  # vai para o cliente: sem o número interno
     linhas += [f'{i.quantidade}x {i.nome}' for i in pedido.itens.all()]
     if pedido.frete:
         linhas.append(f'Frete: {formatar_preco(float(pedido.frete))}')
@@ -746,11 +838,12 @@ def cliente(request, pk: int):
 # ── Pedidos ──
 
 # Mensagem enviada ao cliente quando o status muda (se "avisar cliente" marcado)
+# (sem o número do pedido: ele é só para controle interno da loja)
 _AVISOS_STATUS = {
-    Pedido.Status.PAGO: '✅ Pagamento confirmado! Seu pedido #{n} já está sendo preparado.',
-    Pedido.Status.EM_ENTREGA: '🛵 Seu pedido #{n} saiu para entrega! Já já chega aí.',
-    Pedido.Status.ENTREGUE: '📦 Pedido #{n} entregue. Obrigado pela preferência! 💜',
-    Pedido.Status.CANCELADO: '❌ Seu pedido #{n} foi cancelado. Qualquer dúvida, é só chamar.',
+    Pedido.Status.PAGO: '✅ Pagamento confirmado! Seu pedido já está sendo preparado.',
+    Pedido.Status.EM_ENTREGA: '🛵 Seu pedido saiu para entrega! Já já chega aí.',
+    Pedido.Status.ENTREGUE: '📦 Pedido entregue. Obrigado pela preferência! 💜',
+    Pedido.Status.CANCELADO: '❌ Seu pedido foi cancelado. Qualquer dúvida, é só chamar.',
 }
 
 # Próximo passo sugerido em cada status (botão principal na lista)
@@ -811,7 +904,7 @@ def pedido_status(request, pk: int):
     rotulo = Pedido.Status(novo).label
     aviso = ''
     if request.POST.get('avisar') and novo in _AVISOS_STATUS and obj.cliente:
-        ok = async_to_sync(enviar_whatsapp)(obj.cliente.telefone, _AVISOS_STATUS[novo].format(n=obj.pk))
+        ok = async_to_sync(enviar_whatsapp)(obj.cliente.telefone, _AVISOS_STATUS[novo])
         aviso = ' — cliente avisado' if ok else ' — falha ao avisar no WhatsApp'
         messages.success(request, f'Pedido #{obj.pk}: {rotulo}{aviso}.')
     else:
@@ -946,7 +1039,7 @@ def venda_manual(request):
             pedido = servicos.registrar_venda_manual(
                 itens, status=dados['status'], criado_em=quando, telefone=telefone,
                 nome=dados['nome'], frete=frete.quantize(Decimal('0.01')),
-                observacoes=dados['observacoes'],
+                observacoes=dados['observacoes'], vendedor=request.user,
             )
             n_itens = sum(i['quantidade'] for i in itens)
             auditoria.registrar(

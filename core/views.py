@@ -22,10 +22,10 @@ from .models import SessaoChat
 from .llm_service import (
     processar_mensagem, gerar_menu_texto, gerar_sabores_texto, localizar_item,
     gerar_secoes_lista, gerar_secoes_categoria, gerar_secoes_variantes,
-    buscar_item, buscar_categoria, item_tem_variantes, formatar_preco,
+    buscar_item, buscar_categoria, item_tem_variantes, formatar_preco, transcrever_audio,
 )
 from .notificacoes import (
-    enviar_whatsapp, notificar_equipe,
+    enviar_whatsapp, notificar_equipe, baixar_midia,
     enviar_lista_whatsapp, enviar_imagem_whatsapp, enviar_documento_whatsapp,
 )
 from painel import catalogo, servicos
@@ -74,7 +74,8 @@ def _extrair_dados_webhook(body: dict) -> tuple[str, str, str] | None:
     Returns:
         Tupla (telefone, texto, tipo_interacao) ou None se não for
         mensagem processável. tipo_interacao pode ser 'texto', 'lista',
-        'botao' ou 'midia' (imagem/documento, ex.: comprovante).
+        'botao', 'midia' (imagem/documento, ex.: comprovante) ou 'audio'
+        (texto vazio: a transcrição é feita no webhook).
     """
     try:
         # Evolution API v2 payload structure
@@ -121,6 +122,10 @@ def _extrair_dados_webhook(body: dict) -> tuple[str, str, str] | None:
                 legenda = (message[tipo_midia] or {}).get('caption') or ''
                 return telefone, f'[{rotulo}] {legenda}'.strip(), 'midia'
 
+        # ── Áudio / nota de voz: transcrito depois, no webhook ──
+        if 'audioMessage' in message and telefone:
+            return telefone, '', 'audio'
+
         # ── Mensagem de texto convencional ──
         texto = (
             message.get('conversation')
@@ -161,7 +166,7 @@ def _resumo_itens(itens: list[dict]) -> tuple[str, float]:
     return '\n'.join(linhas), subtotal
 
 
-async def _enviar_cardapio(telefone: str) -> None:
+async def _enviar_cardapio(telefone: str, rodape: bool = True) -> None:
     """Envia o cardápio: imagem opcional + lista interativa ou texto formatado."""
     if settings.CARDAPIO_IMAGEM_URL:
         await enviar_imagem_whatsapp(telefone, settings.CARDAPIO_IMAGEM_URL)
@@ -179,7 +184,7 @@ async def _enviar_cardapio(telefone: str) -> None:
             return
         logger.warning('Lista interativa falhou, enviando cardápio em texto')
 
-    await enviar_whatsapp(telefone, gerar_menu_texto())
+    await enviar_whatsapp(telefone, gerar_menu_texto(rodape=rodape))
 
 
 async def _enviar_pdf_cardapio(telefone: str) -> None:
@@ -203,7 +208,7 @@ async def _enviar_pdf_cardapio(telefone: str) -> None:
 
 
 _BOAS_VINDAS = (
-    'Olá! 👋 Bem-vindo à *Robopod* — Delivery Noturno de Tabacaria! 🌙\n\n'
+    'Olá! 👋 Bem-vindo ao *Robopod* — Assistente Virtual da *Vape Rio Delivery*! 🌙\n\n'
     'Aqui embaixo vai nosso cardápio com os modelos e preços. '
     'É só me dizer qual modelo você quer que eu te mostro os sabores 😉\n\n'
     '🙋 Prefere falar com uma pessoa? Digite *atendente* a qualquer momento.'
@@ -214,7 +219,8 @@ async def _enviar_boas_vindas(telefone: str) -> None:
     """Primeiro contato: boas-vindas (com a opção de atendente), PDF e modelos."""
     await enviar_whatsapp(telefone, _BOAS_VINDAS)
     await _enviar_pdf_cardapio(telefone)
-    await _enviar_cardapio(telefone)
+    # Sem o rodapé de instruções: as boas-vindas logo acima já explicam
+    await _enviar_cardapio(telefone, rodape=False)
 
 
 async def _transferir_para_humano(sessao: SessaoChat, motivo: str) -> None:
@@ -574,7 +580,6 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
 
         sessao.carrinho_temporario['endereco'] = endereco
         pedido = await servicos.criar_pedido(telefone, sessao.carrinho_temporario, resultado_frete)
-        numero_pedido = f' #{pedido.pk}' if pedido else ''
 
         # Atualiza sessão
         sessao.estado_atual = SessaoChat.Estado.AGUARDANDO_COMPROVANTE
@@ -595,7 +600,7 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
         mapa = f"🗺️ _Localizado como: {endereco_mapa}_\n" if endereco_mapa else ''
 
         mensagem_cobranca = (
-            f"🧾 *Resumo do Pedido{numero_pedido}*\n\n"
+            f"🧾 *Resumo do Pedido*\n\n"
             f"{resumo}\n\n"
             f"🛍️ Subtotal: {formatar_preco(subtotal)}\n"
             f"🛵 Frete ({resultado_frete['mensagem']}): {formatar_preco(valor_frete)}\n"
@@ -611,7 +616,8 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
 
         await enviar_whatsapp(telefone, mensagem_cobranca)
 
-        # Notifica a equipe no grupo do WhatsApp
+        # Notifica a equipe no grupo do WhatsApp (o número do pedido só vai para a equipe)
+        numero_pedido = f' #{pedido.pk}' if pedido else ''
         await notificar_equipe(
             f'🛒 *Novo pedido{numero_pedido} aguardando pagamento*\n'
             f'📱 Cliente: {telefone}\n'
@@ -757,6 +763,31 @@ async def _loja_fechada_respondeu(telefone: str) -> bool:
     return True
 
 
+async def _bot_pausado_tratou(telefone: str, texto: str, tipo_interacao: str) -> bool:
+    """Bot pausado no painel: nenhuma resposta automática, nem a de loja fechada.
+
+    A mensagem já ficou registrada para o atendente responder pelo painel.
+    Só o comprovante de pagamento segue o fluxo, que é silencioso (marca o
+    pedido e avisa a equipe). Retorna True se a mensagem já foi tratada aqui.
+    """
+    config = await Configuracao.aobter()
+    if not config.bot_pausado:
+        return False
+    if tipo_interacao == 'midia':
+        sessao = await SessaoChat.objects.filter(telefone=telefone).afirst()
+        if sessao is not None and sessao.estado_atual == SessaoChat.Estado.AGUARDANDO_COMPROVANTE:
+            await _handler_aguardando_comprovante(sessao, texto)
+    return True
+
+
+async def _transcrever_audio(data: dict) -> str:
+    """Baixa a nota de voz e devolve o texto falado ('' se não conseguir)."""
+    midia = await baixar_midia(data)
+    if midia is None:
+        return ''
+    return await transcrever_audio(*midia)
+
+
 # ── Mapa de handlers por estado ──
 _HANDLERS = {
     SessaoChat.Estado.ATENDIMENTO_LLM: _handler_atendimento_llm,
@@ -790,18 +821,27 @@ async def evolution_webhook(request) -> JsonResponse:
         return JsonResponse({'status': 'mensagem ignorada'})
 
     telefone, texto, tipo_interacao = dados
-    logger.info('📩 Mensagem de %s [%s]: %s', telefone, tipo_interacao, texto[:100])
+
+    # Áudio: transcreve e segue como se o cliente tivesse escrito
+    texto_painel = texto
+    if tipo_interacao == 'audio':
+        texto = await _transcrever_audio(body.get('data', body))
+        texto_painel = f'🎤 Áudio: {texto}' if texto else '🎤 Áudio (não foi possível transcrever)'
+    logger.info('📩 Mensagem de %s [%s]: %s', telefone, tipo_interacao, texto_painel[:100])
 
     # Histórico e cadastro do cliente para o painel
     nome_whatsapp = (body.get('data') or {}).get('pushName') or ''
     try:
-        cliente = await servicos.registrar_mensagem_cliente(telefone, texto, nome_whatsapp)
+        cliente = await servicos.registrar_mensagem_cliente(telefone, texto_painel, nome_whatsapp)
     except Exception:
         logger.exception('Falha ao registrar mensagem de %s', telefone)
         cliente = None
     if cliente is not None and cliente.bloqueado:
         logger.info('Cliente %s bloqueado, mensagem ignorada', telefone)
         return JsonResponse({'status': 'cliente bloqueado'})
+
+    if await _bot_pausado_tratou(telefone, texto, tipo_interacao):
+        return JsonResponse({'status': 'bot pausado'})
 
     if await _loja_fechada_respondeu(telefone):
         return JsonResponse({'status': 'loja fechada'})
@@ -830,6 +870,17 @@ async def evolution_webhook(request) -> JsonResponse:
             'Me diga o que deseja ou digite *atendente*.',
         )
         return JsonResponse({'status': 'ok'})
+
+    if tipo_interacao == 'audio' and not texto:
+        if sessao.estado_atual == SessaoChat.Estado.ATENDIMENTO_HUMANO:
+            texto = texto_painel  # o atendente ouve no WhatsApp; o grupo é avisado
+        else:
+            await enviar_whatsapp(
+                telefone,
+                '😕 Não consegui ouvir seu áudio. Pode me mandar por escrito? '
+                'Se preferir, digite *atendente*.',
+            )
+            return JsonResponse({'status': 'ok'})
 
     # Fora do atendimento LLM, botões viram palavras-chave (ex.: cancelar)
     if tipo_interacao in ('botao', 'lista'):

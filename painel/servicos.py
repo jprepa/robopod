@@ -144,7 +144,7 @@ async def criar_pedido(telefone: str, carrinho: dict, frete: dict) -> Pedido | N
 
 def registrar_venda_manual(
     itens: list[dict], *, status: str, criado_em, telefone: str = '', nome: str = '',
-    frete: Decimal = Decimal('0'), observacoes: str = '',
+    frete: Decimal = Decimal('0'), observacoes: str = '', vendedor=None,
 ) -> Pedido:
     """Lança no painel uma venda feita fora do bot (balcão, ligação, conversa
     no WhatsApp pessoal...) e baixa o estoque como num pedido normal.
@@ -167,6 +167,7 @@ def registrar_venda_manual(
             frete=frete,
             total=subtotal + frete,
             observacoes=observacoes,
+            vendedor=vendedor,
             criado_em=criado_em,
         )
         ItemPedido.objects.bulk_create([

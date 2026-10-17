@@ -349,3 +349,35 @@ async def listar_grupos_whatsapp(timeout: float = 10) -> list[dict]:
         if str(g.get('id', '')).endswith('@g.us')
     ]
     return sorted(grupos, key=lambda g: g['nome'].lower())
+
+
+async def baixar_midia(data: dict) -> tuple[bytes, str] | None:
+    """Conteúdo e mimetype de uma mídia recebida (ex.: áudio), ou None.
+
+    Usa o base64 que já vem no webhook (opção "webhook_base64" da Evolution);
+    sem ele, pede o arquivo à Evolution pelo id da mensagem.
+    """
+    mensagem = data.get('message') or {}
+    midia = mensagem.get('audioMessage') or {}
+    mimetype = (midia.get('mimetype') or 'audio/ogg').split(';')[0].strip()
+    if mensagem.get('base64'):
+        try:
+            return base64.b64decode(mensagem['base64']), mimetype
+        except ValueError:
+            logger.warning('base64 inválido no webhook, buscando a mídia na Evolution')
+    try:
+        resp = await _post_com_retry(
+            f"{settings.EVOLUTION_API_URL}/chat/getBase64FromMediaMessage/{settings.EVOLUTION_INSTANCE}",
+            json={'message': {'key': data.get('key') or {}}, 'convertToMp4': False},
+            headers=_evo_headers(),
+            timeout=60,
+            label='Baixar mídia da Evolution',
+        )
+        corpo = resp.json() or {}
+        conteudo = base64.b64decode(corpo.get('base64') or '')
+    except Exception:
+        logger.exception('Falha ao baixar a mídia da mensagem')
+        return None
+    if not conteudo:
+        return None
+    return conteudo, (corpo.get('mimetype') or mimetype).split(';')[0].strip()

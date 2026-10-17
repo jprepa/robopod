@@ -78,9 +78,9 @@
         {% endif %}
 
         {% if nao_lidas %}
-        <li class="info">
+        <li class="{% if config.bot_pausado %}atencao{% else %}info{% endif %}">
           <span class="ic" aria-hidden="true">💬</span>
-          <div>{{ nao_lidas }} conversa{{ nao_lidas|pluralize }} com mensagens não lidas<div class="meta">O bot já está respondendo, é só para acompanhar</div></div>
+          <div>{{ nao_lidas }} conversa{{ nao_lidas|pluralize }} com mensagens não lidas<div class="meta">{% if config.bot_pausado %}O bot está pausado: ninguém respondeu essas mensagens{% else %}O bot já está respondendo, é só para acompanhar{% endif %}</div></div>
           <a class="btn peq" href="{% url 'painel:conversas' %}?filtro=nao_lidas">Abrir</a>
         </li>
         {% endif %}

@@ -5,6 +5,9 @@
 .saudacao .data { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .expediente { display: grid; gap: 14px; margin-bottom: 16px; border-left: 4px solid var(--good); }
 .expediente.fechado { border-left-color: var(--bad); }
+.expediente.pausado { border-left-color: var(--warn); }
+.expediente .acoes { display: flex; gap: 8px; flex-wrap: wrap; }
+.expediente .acoes form { margin: 0; }
 .expediente .linha { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .expediente .estado { display: flex; align-items: center; gap: 14px; }
 .expediente .estado b { font-size: 18px; display: block; }
@@ -13,6 +16,8 @@
 .pulso::after { content: ''; position: absolute; inset: -5px; border-radius: 50%; border: 2px solid var(--good); opacity: .5; animation: pulso 2s ease-out infinite; }
 .fechado .pulso { background: var(--bad); }
 .fechado .pulso::after { border-color: var(--bad); animation: none; opacity: .25; }
+.pausado .pulso { background: var(--warn); }
+.pausado .pulso::after { border-color: var(--warn); animation: none; opacity: .25; }
 @keyframes pulso { from { transform: scale(.6); opacity: .7; } to { transform: scale(1.6); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .pulso::after { animation: none; } }
 .btn.grande { padding: 10px 18px; font-size: 15px; font-weight: 600; }
@@ -90,18 +95,17 @@ td.cli .itens { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
     <h1>{{ saudacao }}, {{ user.first_name|default:user.get_username }} 👋</h1>
     <div class="data">{{ agora|date:"l, j \d\e F · H:i" }}</div>
   </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap">
-    <a class="btn" href="{% url 'painel:venda_manual' %}">＋ Venda manual</a>
-    <a class="btn" href="{% url 'painel:dashboard' %}">Ver dashboard</a>
-  </div>
 </div>
 
-<section class="cartao expediente{% if not config.expediente_aberto %} fechado{% endif %}" aria-label="Expediente">
+<section class="cartao expediente{% if config.bot_pausado %} pausado{% elif not config.expediente_aberto %} fechado{% endif %}" aria-label="Expediente">
   <div class="linha">
     <div class="estado">
       <div class="pulso" aria-hidden="true"></div>
       <div>
-        {% if config.expediente_aberto %}
+        {% if config.bot_pausado %}
+          <b>Bot pausado</b>
+          <span>Ninguém recebe resposta automática{% if config.bot_pausado_em %} desde {{ config.bot_pausado_em|date:"d/m H:i" }}{% endif %} — nem a mensagem de loja fechada. As mensagens continuam chegando em Conversas para você responder.</span>
+        {% elif config.expediente_aberto %}
           <b>Loja aberta</b>
           <span>O bot está atendendo{% if config.expediente_aberto_em %} desde {{ config.expediente_aberto_em|date:"d/m H:i" }}{% endif %}.</span>
         {% else %}
@@ -110,15 +114,26 @@ td.cli .itens { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
         {% endif %}
       </div>
     </div>
-    <form method="post" action="{% url 'painel:expediente' %}"
-          {% if config.expediente_aberto %}onsubmit="return confirm('Encerrar o expediente? Quem chamar vai receber a mensagem de loja fechada.')"{% endif %}>
-      {% csrf_token %}
-      {% if config.expediente_aberto %}
-        <button class="btn grande fechar" type="submit" name="acao" value="fechar">🌙 Encerrar expediente</button>
-      {% else %}
-        <button class="btn grande abrir" type="submit" name="acao" value="abrir">☀️ Abrir a loja</button>
-      {% endif %}
-    </form>
+    <div class="acoes">
+      <form method="post" action="{% url 'painel:expediente' %}"
+            {% if not config.bot_pausado %}onsubmit="return confirm('Pausar o bot? Ninguém vai receber resposta automática (nem a mensagem de loja fechada) até você retomar.')"{% endif %}>
+        {% csrf_token %}
+        {% if config.bot_pausado %}
+          <button class="btn grande abrir" type="submit" name="acao" value="retomar">▶️ Retomar bot</button>
+        {% else %}
+          <button class="btn grande" type="submit" name="acao" value="pausar" title="O bot fica em silêncio total, sem mandar nenhuma mensagem">⏸️ Pausar bot</button>
+        {% endif %}
+      </form>
+      <form method="post" action="{% url 'painel:expediente' %}"
+            {% if config.expediente_aberto %}onsubmit="return confirm('Encerrar o expediente? Quem chamar vai receber a mensagem de loja fechada.')"{% endif %}>
+        {% csrf_token %}
+        {% if config.expediente_aberto %}
+          <button class="btn grande{% if not config.bot_pausado %} fechar{% endif %}" type="submit" name="acao" value="fechar">🌙 Encerrar expediente</button>
+        {% else %}
+          <button class="btn grande{% if not config.bot_pausado %} abrir{% endif %}" type="submit" name="acao" value="abrir">☀️ Abrir a loja</button>
+        {% endif %}
+      </form>
+    </div>
   </div>
   <details{% if not config.expediente_aberto %} open{% endif %}>
     <summary>Mensagem de loja fechada e horário de atendimento</summary>

@@ -1,5 +1,6 @@
 {% url 'painel:estoque_ajustar' tipo obj.pk as url_ajuste %}
 <div class="controle-estoque">
+  <span class="passos">
   {% if obj.estoque is not None %}
   <button class="btn peq" type="button" aria-label="Diminuir" hx-post="{{ url_ajuste }}" hx-vals='{"delta": "-1"}' hx-target="#produto-{{ p.pk }}" hx-swap="outerHTML">−</button>
   {% endif %}
@@ -9,8 +10,10 @@
          hx-post="{{ url_ajuste }}" hx-trigger="change" hx-target="#produto-{{ p.pk }}" hx-swap="outerHTML">
   {% if obj.estoque is not None %}
   <button class="btn peq" type="button" aria-label="Aumentar" hx-post="{{ url_ajuste }}" hx-vals='{"delta": "1"}' hx-target="#produto-{{ p.pk }}" hx-swap="outerHTML">+</button>
-  {% if obj.estoque <= 0 %}<span class="tag cancelado">esgotado</span>{% elif obj.estoque <= minimo %}<span class="tag aguardando_pagamento">baixo</span>{% endif %}
-  {% else %}
+  {% endif %}
+  </span>
+  {% if obj.estoque is None %}
   <span class="muted peq">não controla</span>
+  {% elif obj.estoque <= 0 %}<span class="tag cancelado">esgotado</span>{% elif obj.estoque <= minimo %}<span class="tag aguardando_pagamento">baixo</span>
   {% endif %}
 </div>

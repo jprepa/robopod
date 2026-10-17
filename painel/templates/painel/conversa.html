@@ -1,6 +1,7 @@
 {% extends 'painel/base.html' %}
 {% load painel_tags %}
 {% block titulo %}{{ cliente.nome_exibicao }}{% endblock %}
+{% block corpo_classe %}pagina-chat{% endblock %}
 {% block estilo %}
 .chat-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
 .chat { display: flex; flex-direction: column; padding: 0; height: calc(100vh - 150px); min-height: 420px; overflow: hidden; }
@@ -40,18 +41,57 @@
 .dados { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 13px; }
 .dados dt { color: var(--muted); } .dados dd { margin: 0; overflow-wrap: anywhere; }
 .aviso-bot { font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--warn-soft); color: var(--warn); }
-@media (max-width: 900px) { .chat-layout { grid-template-columns: 1fr; } .chat { height: 70vh; } .msg { max-width: 90%; } }
+.so-celular { display: none !important; }
+.chat-titulo { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.chat-titulo .quem { min-width: 0; flex-direction: column; }
+.chat-titulo .quem b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-titulo .quem span { color: var(--muted); font-size: 12px; }
+.voltar { font-size: 26px; line-height: 1; padding: 2px 8px 4px; color: var(--text); }
+.voltar:hover { text-decoration: none; }
+.pedidos-chat { display: grid; gap: 6px; max-height: 132px; overflow-y: auto; }
+/* Celular: o chat ocupa a tela toda, como um app de mensagens */
+@media (max-width: 900px) {
+  .so-celular { display: flex !important; }
+  .so-desktop { display: none !important; }
+  body.pagina-chat { display: flex; flex-direction: column; height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
+  body.pagina-chat .lateral { flex: none; }
+  body.pagina-chat main { flex: 1; min-height: 0; padding: 0; display: flex; flex-direction: column; }
+  body.pagina-chat .avisos { margin: 8px 8px 0; }
+  .chat-layout { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+  .chat { flex: 1 1 0; height: auto; min-height: 0; border: 0; border-radius: 0; }
+  .mensagens { min-height: 0; }
+  .chat-topo { padding: 6px 10px 6px 2px; flex-wrap: nowrap; }
+  .chat-topo .btn.peq { padding: 6px 9px; }
+  .mensagens { padding: 10px; }
+  .msg { max-width: 88%; }
+  .responder { padding: 8px; gap: 6px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  .aviso-bot { padding: 5px 8px; font-size: 12px; }
+  /* Pedidos e respostas rápidas numa linha só, rolando para o lado */
+  .pedidos-chat, .rapidas { display: flex; flex-wrap: nowrap; overflow-x: auto; max-height: none; gap: 6px; scrollbar-width: none; margin: 0 -8px; padding: 0 8px; }
+  .pedidos-chat::-webkit-scrollbar, .rapidas::-webkit-scrollbar { display: none; }
+  .pedidos-chat .avancar { flex: none; flex-wrap: nowrap; padding: 4px 6px 4px 10px; white-space: nowrap; }
+  .pedidos-chat .avancar .tag { display: none; }
+  .rapidas .btn { flex: none; }
+  .lado { display: none; }
+  .chat-layout.mostrar-lado .lado { display: grid; position: absolute; inset: 0; z-index: 30; overflow-y: auto; align-content: start; padding: 12px; background: var(--bg); }
+}
 {% endblock %}
 {% block conteudo %}
-<div class="topo">
+<div class="topo so-desktop">
   <h1>{{ cliente.nome_exibicao }} <span class="muted" style="font-size:15px;font-weight:500">{{ cliente.telefone|telefone }}</span></h1>
   <a class="btn" href="{% url 'painel:conversas' %}">← Conversas</a>
 </div>
-<div class="chat-layout">
+<div class="chat-layout" id="chat-layout">
   <section class="cartao chat">
     <div class="chat-topo">
-      <div>Estado: <span class="tag {% if em_atendimento_humano %}humano{% endif %}" id="estado-sessao">{{ sessao.get_estado_atual_display|default:"sem sessão" }}</span></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <div class="chat-titulo">
+        <a class="voltar so-celular" href="{% url 'painel:conversas' %}" aria-label="Voltar para as conversas">‹</a>
+        <div class="quem so-celular"><b>{{ cliente.nome_exibicao }}</b><span>{{ cliente.telefone|telefone }}</span></div>
+        <span class="so-desktop">Estado:</span>
+        <span class="tag {% if em_atendimento_humano %}humano{% endif %} so-desktop" id="estado-sessao">{{ sessao.get_estado_atual_display|default:"sem sessão" }}</span>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:nowrap">
+        <button type="button" class="btn peq so-celular" id="abrir-lado" aria-controls="lado" aria-expanded="false" title="Dados do cliente e pedidos">Cliente</button>
         {% if em_atendimento_humano %}
         <form method="post" action="{% url 'painel:conversa_devolver' cliente.telefone %}">{% csrf_token %}
           <input type="hidden" name="avisar" value="1">
@@ -69,7 +109,8 @@
       {% if not mensagens %}<div class="vazio" id="sem-mensagens">Nenhuma mensagem registrada ainda.</div>{% endif %}
     </div>
     <div class="responder">
-      {% if not em_atendimento_humano %}<div class="aviso-bot">Ao responder, você assume a conversa e o bot para de responder este cliente até você devolvê-la.</div>{% endif %}
+      {% if not em_atendimento_humano %}<div class="aviso-bot">Ao responder, você assume a conversa<span class="so-desktop" style="display:inline">&nbsp;e o bot para de responder este cliente até você devolvê-la</span>.</div>{% endif %}
+      {% if pedidos_abertos %}<div class="pedidos-chat">
       {% for p in pedidos_abertos %}{% if p.proximo %}
       <form class="avancar" method="post" action="{% url 'painel:pedido_status' p.pk %}">
         {% csrf_token %}
@@ -80,6 +121,7 @@
         <button class="btn primario peq" type="submit" title="{% if p.origem == 'manual' %}Muda o status{% else %}Muda o status e avisa o cliente no WhatsApp{% endif %}">→ {{ p.proximo_rotulo }}</button>
       </form>
       {% endif %}{% endfor %}
+      </div>{% endif %}
       <div class="rapidas">
         {% for r in respostas_botoes %}<button type="button" class="btn" data-atalho="{{ r.atalho }}" title="/{{ r.atalho }}">{{ r.titulo }}</button>
         {% endfor %}<button type="button" class="btn discreto" id="nova-rapida-abrir" title="Criar uma resposta rápida (usa o texto já digitado)">＋ Nova</button>
@@ -110,7 +152,8 @@
     </div>
   </section>
 
-  <aside class="lado">
+  <aside class="lado" id="lado">
+    <button type="button" class="btn so-celular" id="fechar-lado" style="justify-self:start">‹ Voltar ao chat</button>
     <section class="cartao">
       <h2>Cliente</h2>
       <dl class="dados">
@@ -142,6 +185,17 @@
   const form = document.getElementById('form-responder');
   const texto = document.getElementById('texto');
   const estado = document.getElementById('estado-sessao');
+
+  // Celular: dados do cliente abrem por cima do chat
+  const layout = document.getElementById('chat-layout');
+  const abrirLado = document.getElementById('abrir-lado');
+  function alternarLado(abrir) {
+    layout.classList.toggle('mostrar-lado', abrir);
+    abrirLado.setAttribute('aria-expanded', String(abrir));
+  }
+  abrirLado.addEventListener('click', () => alternarLado(!layout.classList.contains('mostrar-lado')));
+  document.getElementById('fechar-lado').addEventListener('click', () => alternarLado(false));
+  if (window.matchMedia('(max-width: 900px)').matches) document.getElementById('texto').placeholder = 'Mensagem ou / para atalhos';
   let ultimoId = {{ ultimo_id }};
   let buscando = false;
 

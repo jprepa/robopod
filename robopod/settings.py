@@ -89,6 +89,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # ── Chaves de API ──
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+# Transcrição dos áudios dos clientes (whisper-1 também funciona)
+OPENAI_TRANSCRICAO_MODEL = os.getenv('OPENAI_TRANSCRICAO_MODEL', 'gpt-4o-mini-transcribe')
 
 # ── Evolution API ──
 EVOLUTION_API_URL = os.getenv('EVOLUTION_API_URL', 'http://localhost:8080')

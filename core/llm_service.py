@@ -43,7 +43,7 @@ def formatar_preco(valor: float) -> str:
     return f"R$ {valor:,.2f}".replace(',', '_').replace('.', ',').replace('_', '.')
 
 
-def gerar_menu_texto(com_sabores: bool = False) -> str:
+def gerar_menu_texto(com_sabores: bool = False, rodape: bool = True) -> str:
     """Gera o cardápio formatado para WhatsApp (negrito/itálico) e para o prompt.
 
     Os itens são numerados em sequência para que o cliente possa pedir
@@ -53,6 +53,7 @@ def gerar_menu_texto(com_sabores: bool = False) -> str:
     Para o cliente vai só modelo + preço (com muitos sabores a mensagem fica
     ilegível); os sabores são enviados depois, por modelo (`gerar_sabores_texto`).
     O system prompt usa `com_sabores=True` para a IA conhecer as opções.
+    `rodape=False` tira as instruções do fim (as boas-vindas já dizem isso).
     """
     linhas: list[str] = [
         '📋 *CARDÁPIO ROBOPOD*',
@@ -76,6 +77,8 @@ def gerar_menu_texto(com_sabores: bool = False) -> str:
 
         linhas.append('')  # linha em branco entre categorias
 
+    if not rodape:
+        return '\n'.join(linhas).rstrip()
     linhas.append('━━━━━━━━━━━━━━━')
     if tem_sabores:
         linhas.append('Me fala qual modelo você quer que eu te mando os sabores disponíveis =)')
@@ -531,3 +534,25 @@ async def processar_mensagem(
         LLMResult(tipo='texto', conteudo=texto_resposta),
         novo_historico,
     )
+
+
+# Extensão do arquivo pelo mimetype: a OpenAI identifica o formato pelo nome
+_EXTENSOES_AUDIO = {
+    'audio/ogg': 'ogg', 'audio/opus': 'ogg', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a',
+    'audio/aac': 'm4a', 'audio/wav': 'wav', 'audio/webm': 'webm', 'audio/amr': 'amr',
+}
+
+
+async def transcrever_audio(conteudo: bytes, mimetype: str = 'audio/ogg') -> str:
+    """Transcreve um áudio do cliente (nota de voz do WhatsApp). '' se falhar."""
+    extensao = _EXTENSOES_AUDIO.get(mimetype, 'ogg')
+    try:
+        resposta = await _get_client().audio.transcriptions.create(
+            model=settings.OPENAI_TRANSCRICAO_MODEL,
+            file=(f'audio.{extensao}', conteudo, mimetype),
+            language='pt',
+        )
+    except Exception:
+        logger.exception('Erro ao transcrever áudio')
+        return ''
+    return (resposta.text or '').strip()

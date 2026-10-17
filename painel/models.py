@@ -156,6 +156,10 @@ class Pedido(models.Model):
     frete_fornecedor = models.CharField(max_length=30, blank=True)
     distancia_km = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     observacoes = models.TextField(blank=True)
+    vendedor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+        help_text='Quem lançou a venda manual. Vazio = pedido feito pelo bot no WhatsApp',
+    )
     estoque_baixado = models.BooleanField(default=False)
     criado_em = models.DateTimeField(default=timezone.now, db_index=True)
     atualizado_em = models.DateTimeField(auto_now=True)
@@ -210,6 +214,11 @@ class Configuracao(models.Model):
         default=True, help_text='Fechado: o bot só responde com a mensagem de loja fechada',
     )
     expediente_fechado_em = models.DateTimeField(null=True, blank=True)
+    bot_pausado = models.BooleanField(
+        default=False,
+        help_text='Pausado: o bot não responde ninguém (nem com a mensagem de loja fechada)',
+    )
+    bot_pausado_em = models.DateTimeField(null=True, blank=True)
     expediente_aberto_em = models.DateTimeField(null=True, blank=True)
     horario_atendimento = models.CharField(max_length=120, blank=True, default=HORARIO_PADRAO)
     mensagem_fechado = models.TextField(blank=True, default=MENSAGEM_FECHADO_PADRAO)

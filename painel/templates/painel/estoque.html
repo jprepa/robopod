@@ -12,11 +12,44 @@ tbody.inativo .linha-produto td:first-child, tr.inativo td:first-child { opacity
 .categoria-titulo { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .categoria-titulo h2 { margin: 0; }
 tbody + tbody { border-top: 1px solid var(--border); }
+.acoes-topo { display: flex; gap: 8px; flex-wrap: wrap; }
+.controle-estoque .passos { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+/* Celular: cada produto vira um cartão, sem rolagem lateral */
+@media (max-width: 640px) {
+  .acoes-topo { width: 100%; }
+  .acoes-topo .btn { flex: 1 1 auto; justify-content: center; }
+  .filtros input[type=search] { max-width: none; flex: 1 1 100%; }
+  .estoque-tabela thead { display: none; }
+  .estoque-tabela, .estoque-tabela tbody { display: block; }
+  .estoque-tabela td { border: 0; padding: 0; }
+  .estoque-tabela .c-vazio { display: none; }
+  .estoque-tabela tr.linha-produto {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px 8px; align-items: center;
+    padding: 12px 14px; border-top: 1px solid var(--border);
+  }
+  .estoque-tabela tbody:first-of-type tr.linha-produto { border-top: 0; }
+  .estoque-tabela .linha-produto .c-nome { grid-column: 1 / -1; }
+  .estoque-tabela .linha-produto .c-preco { grid-column: 1; }
+  .estoque-tabela .linha-produto .c-preco::before { content: 'R$ '; color: var(--muted); font-size: 13px; }
+  .estoque-tabela .linha-produto .c-estoque { grid-column: 1 / -1; grid-row: 3; }
+  .estoque-tabela .linha-produto .c-cardapio { grid-column: 2; grid-row: 2; }
+  .estoque-tabela .linha-produto .c-acoes { grid-column: 3; grid-row: 2; }
+  .estoque-tabela tr.linha-variante {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px 8px; align-items: center;
+    padding: 8px 14px 8px 22px; border-top: 1px dashed var(--border);
+  }
+  .estoque-tabela .linha-variante .c-nome { padding: 0; overflow-wrap: anywhere; }
+  .estoque-tabela .controle-estoque { flex-wrap: nowrap; }
+  .estoque-tabela .linha-variante .controle-estoque .tag { display: none; }
+  .in-estoque { width: 56px !important; }
+  .in-preco { width: 110px !important; }
+  .estoque-tabela .btn.peq { padding: 7px 10px; }
+}
 {% endblock %}
 {% block conteudo %}
 <div class="topo">
   <h1>Estoque e cardápio</h1>
-  <div style="display:flex;gap:8px">
+  <div class="acoes-topo">
     <a class="btn" href="{% url 'painel:venda_manual' %}" title="Venda feita fora do bot: baixa o estoque e entra nos relatórios">Lançar venda manual</a>
     <a class="btn" href="{% url 'painel:categorias' %}">Categorias</a>
     <a class="btn primario" href="{% url 'painel:produto_novo' %}">+ Novo produto</a>
@@ -35,7 +68,7 @@ tbody + tbody { border-top: 1px solid var(--border); }
     <h2>{{ categoria.titulo }}{% if not categoria.ativo %} <span class="tag cancelado">categoria oculta</span>{% endif %}</h2>
     <span class="muted peq">{{ produtos|length }} produto{{ produtos|length|pluralize }}</span>
   </div>
-  <table>
+  <table class="estoque-tabela">
     <thead><tr><th>Produto</th><th>Preço (R$)</th><th>Estoque</th><th>Cardápio</th><th></th></tr></thead>
     {% for p in produtos %}{% include 'painel/parciais/estoque_produto.html' %}{% endfor %}
   </table>
