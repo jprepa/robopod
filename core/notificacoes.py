@@ -6,6 +6,7 @@ quando a Evolution demora a responder.
 """
 
 import asyncio
+import base64
 import logging
 
 import httpx
@@ -156,6 +157,46 @@ async def enviar_imagem_whatsapp(
         enviado = False
     await registrar_mensagem_enviada(
         telefone, f'[imagem] {legenda}'.strip(), 'bot', enviado,
+    )
+    return enviado
+
+
+async def enviar_documento_whatsapp(
+    telefone: str,
+    conteudo: bytes,
+    nome_arquivo: str,
+    legenda: str = '',
+    mimetype: str = 'application/pdf',
+) -> bool:
+    """Envia um arquivo (ex.: PDF do cardápio) via Evolution API.
+
+    O arquivo vai em base64 no corpo, então não precisa de URL pública.
+
+    Returns:
+        True se o envio foi bem-sucedido.
+    """
+    try:
+        await _post_com_retry(
+            _evo_url('sendMedia'),
+            json={
+                'number': telefone,
+                'mediatype': 'document',
+                'mimetype': mimetype,
+                'fileName': nome_arquivo,
+                'caption': legenda,
+                'media': base64.b64encode(conteudo).decode(),
+            },
+            headers=_evo_headers(),
+            timeout=90,  # arquivo grande: a Evolution ainda sobe para o WhatsApp
+            label=f'WhatsApp documento → {telefone}',
+        )
+        logger.info('Documento WhatsApp enviado para %s', telefone)
+        enviado = True
+    except Exception:
+        logger.exception('Falha ao enviar documento WhatsApp para %s', telefone)
+        enviado = False
+    await registrar_mensagem_enviada(
+        telefone, f'[documento] {nome_arquivo} {legenda}'.strip(), 'bot', enviado,
     )
     return enviado
 

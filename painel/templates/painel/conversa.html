@@ -19,8 +19,23 @@
 .responder { border-top: 1px solid var(--border); padding: 10px; display: grid; gap: 8px; background: var(--surface); }
 .responder form { display: flex; gap: 8px; align-items: flex-end; }
 .responder textarea { resize: none; min-height: 40px; max-height: 160px; }
+.avancar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
 .rapidas { display: flex; gap: 6px; flex-wrap: wrap; }
-.rapidas button { font-size: 12px; padding: 3px 9px; }
+.rapidas button, .rapidas a.btn { font-size: 12px; padding: 3px 9px; }
+.rapidas .discreto { color: var(--muted); }
+#form-responder { position: relative; }
+.responder form.nova-rapida[hidden] { display: none; }
+.responder form.nova-rapida { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: stretch; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.nova-rapida textarea, .nova-rapida .linha { grid-column: 1 / -1; }
+.nova-rapida textarea { max-height: none; min-height: 70px; resize: vertical; }
+.nova-rapida .linha { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; font-size: 13px; }
+.comandos { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); max-height: 280px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.25); padding: 4px; z-index: 20; }
+.comandos .cmd { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: baseline; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.comandos .cmd.ativo { background: var(--accent-soft); }
+.comandos .cmd code { font-size: 12px; }
+.comandos .cmd .det { grid-column: 2 / -1; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.comandos .cmd .tipo { font-size: 11px; color: var(--muted); }
+.comandos .rodape { padding: 6px 8px 4px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); margin-top: 4px; }
 .lado { display: grid; gap: 16px; }
 .dados { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 13px; }
 .dados dt { color: var(--muted); } .dados dd { margin: 0; overflow-wrap: anywhere; }
@@ -55,15 +70,41 @@
     </div>
     <div class="responder">
       {% if not em_atendimento_humano %}<div class="aviso-bot">Ao responder, você assume a conversa e o bot para de responder este cliente até você devolvê-la.</div>{% endif %}
+      {% for p in pedidos_abertos %}{% if p.proximo %}
+      <form class="avancar" method="post" action="{% url 'painel:pedido_status' p.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="status" value="{{ p.proximo }}">
+        {% if p.origem != 'manual' %}<input type="hidden" name="avisar" value="1">{% endif %}
+        <input type="hidden" name="voltar" value="{{ request.get_full_path }}">
+        <span><a href="{% url 'painel:pedido' p.pk %}">Pedido #{{ p.pk }}</a> · {{ p.total|brl }} <span class="tag {{ p.status }}">{{ p.get_status_display }}</span></span>
+        <button class="btn primario peq" type="submit" title="{% if p.origem == 'manual' %}Muda o status{% else %}Muda o status e avisa o cliente no WhatsApp{% endif %}">→ {{ p.proximo_rotulo }}</button>
+      </form>
+      {% endif %}{% endfor %}
       <div class="rapidas">
-        <button type="button" class="btn" data-texto="Oi! Aqui é da Robopod, já vou te ajudar 😊">Saudação</button>
-        <button type="button" class="btn" data-texto="✅ Pagamento confirmado! Seu pedido já está sendo preparado.">Pagamento ok</button>
-        <button type="button" class="btn" data-texto="🛵 Seu pedido saiu para entrega! Já já chega aí.">Saiu p/ entrega</button>
-        <button type="button" class="btn" data-texto="Chave PIX: {{ chave_pix }}">Chave PIX</button>
+        {% for r in respostas_botoes %}<button type="button" class="btn" data-atalho="{{ r.atalho }}" title="/{{ r.atalho }}">{{ r.titulo }}</button>
+        {% endfor %}<button type="button" class="btn discreto" id="nova-rapida-abrir" title="Criar uma resposta rápida (usa o texto já digitado)">＋ Nova</button>
+        <a class="btn discreto" href="{% url 'painel:respostas_rapidas' %}" title="Editar, reordenar ou excluir respostas rápidas">⚙</a>
       </div>
+      <form class="nova-rapida" id="nova-rapida" method="post" action="{% url 'painel:respostas_rapidas' %}" hidden>
+        {% csrf_token %}
+        <input type="hidden" name="voltar" value="{{ request.get_full_path }}">
+        <input type="hidden" name="ordem" value="{{ comandos_chat.respostas|length }}">
+        <input type="hidden" name="ativo" value="on">
+        <input type="text" name="titulo" maxlength="40" placeholder="Nome do botão (ex.: Agradecimento)" required>
+        <input type="text" name="atalho" maxlength="31" placeholder="Comando (ex.: obrigado)" required>
+        <textarea name="texto" rows="3" required placeholder="Mensagem. Variáveis: {nome} {pix} {pedido} {total} {endereco} {horario}"></textarea>
+        <div class="linha">
+          <label><input type="checkbox" name="mostrar_botao" checked> Mostrar como botão</label>
+          <span style="display:flex;gap:8px">
+            <button type="button" class="btn peq" id="nova-rapida-cancelar">Cancelar</button>
+            <button type="submit" class="btn primario peq">Salvar resposta</button>
+          </span>
+        </div>
+      </form>
       <form id="form-responder" method="post" action="{% url 'painel:conversa_responder' cliente.telefone %}">
         {% csrf_token %}
-        <textarea name="texto" id="texto" rows="1" placeholder="Escreva uma mensagem (Enter envia, Shift+Enter quebra linha)" required></textarea>
+        <div class="comandos" id="comandos" role="listbox" hidden></div>
+        <textarea name="texto" id="texto" rows="1" placeholder="Escreva uma mensagem ou / para respostas e modelos (Enter envia)" required autocomplete="off"></textarea>
         <button class="btn primario" type="submit">Enviar</button>
       </form>
     </div>
@@ -94,6 +135,7 @@
 </div>
 {% endblock %}
 {% block script %}
+{{ comandos_chat|json_script:"comandos-chat" }}
 <script>
 (function () {
   const caixa = document.getElementById('mensagens');
@@ -141,14 +183,148 @@
       else alert('Não foi possível enviar. Tente de novo.');
     } finally { botao.disabled = false; texto.focus(); }
   });
+  function ajustarAltura() { texto.style.height = 'auto'; texto.style.height = Math.min(texto.scrollHeight, 160) + 'px'; }
+
+  // ── Respostas rápidas e comandos "/" ──
+  const cmds = JSON.parse(document.getElementById('comandos-chat').textContent);
+  const menu = document.getElementById('comandos');
+  const vars = cmds.variaveis;
+  // {nome} vazio some junto da vírgula: "Oi, {nome}!" -> "Oi!"
+  const preencher = (t) => t.replace(/([ ,]*)\{(\w+)\}/g, (m, antes, chave) => {
+    if (!(chave in vars)) return m;
+    return vars[chave] ? antes + vars[chave] : (chave === 'nome' ? '' : antes);
+  });
+  const fixosLivres = cmds.fixos.filter(f => !cmds.respostas.some(r => r.atalho === f.atalho));
+  const resumo = (t) => t.replace(/\s+/g, ' ').trim();
+  const entradas = [
+    ...cmds.respostas.map(r => ({ atalho: r.atalho, titulo: r.titulo, tipo: 'resposta', texto: preencher(r.texto) })),
+    ...fixosLivres.map(f => ({ atalho: f.atalho, titulo: f.titulo, tipo: 'cliente', texto: f.texto })),
+    ...cmds.produtos.map(p => ({ atalho: p.atalho, titulo: p.titulo, tipo: 'modelo', texto: p.texto, det: p.detalhe })),
+  ];
+  const norm = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  entradas.forEach(e => { e.chaves = [norm(e.atalho), norm(e.titulo)]; e.det = e.det || resumo(e.texto); });
+  const subsequencia = (q, s) => { let i = 0; for (const c of s) if (c === q[i]) i++; return i === q.length; };
+  function nota(q, e) {
+    if (!q) return e.tipo === 'modelo' ? 1 : 2;
+    let n = 0;
+    for (const k of e.chaves) {
+      if (k.startsWith(q)) n = Math.max(n, 5);
+      else if (k.includes(q)) n = Math.max(n, 4);
+      else if (q.length >= 3 && subsequencia(q, k)) n = Math.max(n, 2);  // "elf45k" acha "Elf Bar 45k"
+    }
+    return n;
+  }
+
+  let visiveis = [], ativo = 0, token = null;
+  const menuAberto = () => !menu.hidden;
+  function fecharMenu() { menu.hidden = true; token = null; }
+
+  function tokenAtual() {
+    const pos = texto.selectionStart;
+    if (pos !== texto.selectionEnd) return null;
+    const m = texto.value.slice(0, pos).match(/(^|\s)\/([^\s/]*)$/);
+    return m ? { inicio: pos - m[2].length - 1, fim: pos, q: norm(m[2]) } : null;
+  }
+
+  function desenharMenu() {
+    menu.innerHTML = '';
+    if (!visiveis.length) {
+      menu.innerHTML = '<div class="rodape" style="border:0;margin:0">Nada encontrado. Crie uma resposta em ＋ Nova.</div>';
+      return;
+    }
+    visiveis.forEach((e, i) => {
+      const linha = document.createElement('div');
+      linha.className = 'cmd' + (i === ativo ? ' ativo' : '');
+      linha.setAttribute('role', 'option');
+      linha.innerHTML = '<code></code><span class="tit"></span><span class="tipo"></span><span class="det"></span>';
+      linha.querySelector('code').textContent = '/' + e.atalho;
+      linha.querySelector('.tit').textContent = e.titulo;
+      linha.querySelector('.tipo').textContent = e.tipo;
+      linha.querySelector('.det').textContent = e.det;
+      linha.addEventListener('mousedown', (ev) => { ev.preventDefault(); escolher(e); });
+      menu.appendChild(linha);
+    });
+    const rodape = document.createElement('div');
+    rodape.className = 'rodape';
+    rodape.textContent = '↑↓ navegar · Enter ou Tab insere · Esc fecha';
+    menu.appendChild(rodape);
+    menu.querySelector('.cmd.ativo')?.scrollIntoView({ block: 'nearest' });
+  }
+
+  function atualizarMenu() {
+    token = tokenAtual();
+    if (!token) return fecharMenu();
+    visiveis = entradas
+      .map((e, i) => ({ e, i, n: nota(token.q, e) }))
+      .filter(x => x.n > 0)
+      .sort((a, b) => b.n - a.n || a.i - b.i)
+      .slice(0, 40)
+      .map(x => x.e);
+    ativo = 0;
+    menu.hidden = false;
+    desenharMenu();
+  }
+
+  function inserir(conteudo, inicio, fim) {
+    texto.value = texto.value.slice(0, inicio) + conteudo + texto.value.slice(fim);
+    const pos = inicio + conteudo.length;
+    texto.focus();
+    texto.setSelectionRange(pos, pos);
+    ajustarAltura();
+  }
+
+  function escolher(e) {
+    if (token) inserir(e.texto, token.inicio, token.fim);
+    fecharMenu();
+  }
+
+  texto.addEventListener('input', () => { ajustarAltura(); atualizarMenu(); });
+  texto.addEventListener('click', atualizarMenu);
+  texto.addEventListener('blur', () => setTimeout(fecharMenu, 150));
   texto.addEventListener('keydown', (ev) => {
+    if (menuAberto() && visiveis.length) {
+      if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        ativo = (ativo + (ev.key === 'ArrowDown' ? 1 : -1) + visiveis.length) % visiveis.length;
+        desenharMenu();
+        return;
+      }
+      if ((ev.key === 'Enter' && !ev.shiftKey) || ev.key === 'Tab') {
+        ev.preventDefault();
+        escolher(visiveis[ativo]);
+        return;
+      }
+    }
+    if (menuAberto() && ev.key === 'Escape') { ev.preventDefault(); fecharMenu(); return; }
     if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); form.requestSubmit(); }
   });
-  function ajustarAltura() { texto.style.height = 'auto'; texto.style.height = Math.min(texto.scrollHeight, 160) + 'px'; }
-  texto.addEventListener('input', ajustarAltura);
-  document.querySelectorAll('.rapidas [data-texto]').forEach(b => b.addEventListener('click', () => {
-    texto.value = b.dataset.texto; ajustarAltura(); texto.focus();
+
+  // Botões: insere onde está o cursor (ou preenche a caixa vazia)
+  document.querySelectorAll('.rapidas [data-atalho]').forEach(b => b.addEventListener('click', () => {
+    const e = entradas.find(x => x.tipo === 'resposta' && x.atalho === b.dataset.atalho);
+    if (!e) return;
+    const ini = texto.value.trim() ? texto.selectionStart : 0;
+    const fim = texto.value.trim() ? texto.selectionEnd : texto.value.length;
+    inserir(e.texto, ini, fim);
   }));
+
+  // ＋ Nova: salva o texto digitado como resposta rápida
+  const nova = document.getElementById('nova-rapida');
+  const novaAtalho = nova.querySelector('[name=atalho]');
+  const novaTitulo = nova.querySelector('[name=titulo]');
+  let atalhoEditado = false;
+  novaAtalho.addEventListener('input', () => { atalhoEditado = true; });
+  novaTitulo.addEventListener('input', () => {
+    if (!atalhoEditado) novaAtalho.value = norm(novaTitulo.value).slice(0, 30);
+  });
+  document.getElementById('nova-rapida-abrir').addEventListener('click', () => {
+    nova.hidden = !nova.hidden;
+    if (nova.hidden) return;
+    const corpo = nova.querySelector('[name=texto]');
+    if (!corpo.value && texto.value.trim()) corpo.value = texto.value.trim();
+    novaTitulo.focus();
+  });
+  document.getElementById('nova-rapida-cancelar').addEventListener('click', () => { nova.hidden = true; texto.focus(); });
 })();
 </script>
 {% endblock %}

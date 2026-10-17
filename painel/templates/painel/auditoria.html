@@ -1,0 +1,72 @@
+{% extends 'painel/base.html' %}
+{% load painel_tags %}
+{% block titulo %}Auditoria{% endblock %}
+{% block estilo %}
+.auditoria td { vertical-align: top; }
+.auditoria .quando { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.auditoria .quem { white-space: nowrap; }
+.auditoria .ip { display: block; font-size: 12px; color: var(--muted); }
+.mudancas { list-style: none; margin: 4px 0 0; padding: 0; font-size: 13px; color: var(--text-2); }
+.mudancas .antes { color: var(--muted); text-decoration: line-through; }
+.tag.bot { background: var(--accent-soft); color: var(--accent); }
+.filtros input[type=date] { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+{% endblock %}
+{% block conteudo %}
+<div class="topo">
+  <h1>Auditoria <span class="muted" style="font-size:15px;font-weight:500">{{ pagina.paginator.count }}</span></h1>
+</div>
+<form class="filtros" method="get">
+  <input type="search" name="q" value="{{ busca }}" placeholder="Buscar na descrição ou nº do pedido">
+  <select name="responsavel" onchange="this.form.submit()" style="width:auto" aria-label="Responsável">
+    <option value="">Todos os responsáveis</option>
+    {% for r in responsaveis %}<option value="{{ r }}" {% if r == responsavel %}selected{% endif %}>{{ r }}</option>{% endfor %}
+  </select>
+  <label class="muted peq">De <input type="date" name="de" value="{{ de }}"></label>
+  <label class="muted peq">Até <input type="date" name="ate" value="{{ ate }}"></label>
+  {% if tipo %}<input type="hidden" name="tipo" value="{{ tipo }}">{% endif %}
+  <button class="btn" type="submit">Filtrar</button>
+  <div class="chips">
+    <a class="chip {% if not tipo %}ativo{% endif %}" href="{% url_com tipo='' pagina='' %}">Tudo</a>
+    {% for valor, rotulo in tipos %}
+      <a class="chip {% if tipo == valor %}ativo{% endif %}" href="{% url_com tipo=valor pagina='' %}">{{ rotulo }}</a>
+    {% endfor %}
+  </div>
+</form>
+<div class="cartao tabela-wrap" style="padding:0">
+  <table class="auditoria">
+    <thead><tr><th>Quando</th><th>Responsável</th><th>Tipo</th><th>Ação</th><th></th></tr></thead>
+    <tbody>
+    {% for r in pagina %}
+      <tr>
+        <td class="quando">{{ r.criado_em|date:"d/m/Y H:i" }}</td>
+        <td class="quem">
+          {% if r.responsavel == bot %}<span class="tag bot">Bot</span>{% else %}{{ r.responsavel }}{% if not r.usuario_id %} <span class="muted peq" title="Sem usuário no sistema (excluído ou login recusado)">⚠</span>{% endif %}{% endif %}
+          {% if r.ip %}<span class="ip">{{ r.ip }}</span>{% endif %}
+        </td>
+        <td><span class="tag">{{ r.get_tipo_display }}</span></td>
+        <td>
+          {{ r.descricao }}
+          {% if r.mudancas %}
+          <ul class="mudancas">
+            {% for campo, valores in r.mudancas.items %}
+              <li>{{ campo }}: <span class="antes">{{ valores.0 }}</span> → {{ valores.1 }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </td>
+        <td class="num">{% if r.link %}<a class="btn peq" href="{{ r.link }}">Abrir</a>{% endif %}</td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="5" class="vazio">Nenhum registro{% if busca or tipo or responsavel or de or ate %} com esses filtros{% endif %}.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if pagina.paginator.num_pages > 1 %}
+<div class="paginacao">
+  {% if pagina.has_previous %}<a class="btn peq" href="{% url_com pagina=pagina.previous_page_number %}">← Anterior</a>{% endif %}
+  <span class="muted">Página {{ pagina.number }} de {{ pagina.paginator.num_pages }}</span>
+  {% if pagina.has_next %}<a class="btn peq" href="{% url_com pagina=pagina.next_page_number %}">Próxima →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -71,9 +71,14 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
+# Arquivos enviados pelo painel (ex.: PDF do cardápio). Com o volume `.:/app`
+# do docker-compose, ficam na pasta do projeto na VPS e sobrevivem a rebuilds.
+MEDIA_URL = 'media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 # ── Painel ──
 LOGIN_URL = 'painel:login'
-LOGIN_REDIRECT_URL = 'painel:dashboard'
+LOGIN_REDIRECT_URL = 'painel:inicio'
 LOGOUT_REDIRECT_URL = 'painel:login'
 # Hora em que vira o "dia comercial" nos relatórios: com a loja aberta das 18h
 # às 03h, uma venda à 01h conta para a noite anterior.

@@ -9,3 +9,4 @@ staticfiles/
 *.log
 .venv/
 venv/
+media/

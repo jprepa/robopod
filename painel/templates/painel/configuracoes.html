@@ -45,6 +45,32 @@
     </form>
   </section>
   <section class="cartao">
+    <h2>Cardápio em PDF</h2>
+    <p class="muted" style="margin-top:0">
+      Enviado ao cliente junto das boas-vindas, antes da lista de modelos e preços.
+    </p>
+    {% if config.cardapio_pdf %}
+      <p>📄 PDF atual: <a href="{% url 'painel:cardapio_pdf' %}" target="_blank">{{ config.cardapio_pdf.size|filesizeformat }}</a></p>
+    {% else %}
+      <p class="muted">Nenhum PDF carregado: o bot manda só o cardápio em texto.</p>
+    {% endif %}
+    <form method="post" enctype="multipart/form-data" class="grade" style="gap:10px">
+      {% csrf_token %}
+      <input type="file" name="cardapio_pdf" accept="application/pdf,.pdf" required>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn primario" type="submit">{% if config.cardapio_pdf %}Trocar PDF{% else %}Enviar PDF{% endif %}</button>
+        {% if config.cardapio_pdf %}<button class="btn" type="submit" name="cardapio_pdf" value="remover" formnovalidate>Remover</button>{% endif %}
+      </div>
+    </form>
+  </section>
+  <section class="cartao">
+    <h2>Respostas rápidas do chat</h2>
+    <p class="muted" style="margin-top:0">
+      Mensagens prontas que viram botão na conversa e comando com <code>/</code> (ex.: <code>/obrigado</code>, <code>/rastreio</code>).
+    </p>
+    <a class="btn" href="{% url 'painel:respostas_rapidas' %}">Gerenciar respostas rápidas</a>
+  </section>
+  <section class="cartao">
     <h2>Link nos avisos</h2>
     {% if painel_url %}
       <p style="margin-top:0">Os avisos trazem um link direto para a conversa: <span class="muted">{{ painel_url }}</span></p>

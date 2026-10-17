@@ -1,7 +1,8 @@
 from django.contrib import admin
 
 from .models import (
-    Categoria, Cliente, Configuracao, ItemPedido, Mensagem, Pedido, Produto, Variante,
+    Categoria, Cliente, Configuracao, ItemPedido, Mensagem, Pedido, Produto, RegistroAuditoria,
+    Variante,
 )
 
 admin.site.register(Configuracao)
@@ -50,3 +51,21 @@ class MensagemAdmin(admin.ModelAdmin):
     list_display = ('telefone', 'autor', 'texto', 'criado_em')
     list_filter = ('autor',)
     search_fields = ('telefone', 'texto')
+
+
+@admin.register(RegistroAuditoria)
+class RegistroAuditoriaAdmin(admin.ModelAdmin):
+    """Só leitura: registro de auditoria não se edita nem se apaga."""
+    list_display = ('criado_em', 'responsavel', 'tipo', 'descricao', 'ip')
+    list_filter = ('tipo', 'responsavel')
+    search_fields = ('descricao', 'responsavel', 'alvo_id')
+    date_hierarchy = 'criado_em'
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

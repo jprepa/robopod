@@ -10,7 +10,7 @@ from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 
-from . import catalogo
+from . import auditoria, catalogo
 from .models import Cliente, ItemPedido, Mensagem, Pedido, Produto, Variante
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,13 @@ async def aviso_humano_recente(telefone: str, texto_aviso: str, minutos: int = 1
     return await Mensagem.objects.filter(
         telefone=telefone, autor=Mensagem.Autor.BOT,
         texto=texto_aviso, criado_em__gte=limite,
+    ).aexists()
+
+
+async def bot_enviou_desde(telefone: str, texto: str, desde) -> bool:
+    """True se o bot já mandou exatamente esse texto ao cliente desde `desde`."""
+    return await Mensagem.objects.filter(
+        telefone=telefone, autor=Mensagem.Autor.BOT, texto=texto, criado_em__gte=desde,
     ).aexists()
 
 
@@ -117,6 +124,12 @@ def _criar_pedido(telefone: str, carrinho: dict, frete: dict) -> Pedido:
         _movimentar_estoque(pedido, -1)
         pedido.estoque_baixado = True
         pedido.save(update_fields=['estoque_baixado'])
+    auditoria.registrar_bot(
+        auditoria.Tipo.PEDIDO, 'pedido_criar',
+        f'Pedido #{pedido.pk} criado pelo bot para {cliente.nome_exibicao} '
+        f'(total R$ {auditoria.texto(pedido.total)})',
+        alvo=pedido,
+    )
     return pedido
 
 
@@ -190,6 +203,14 @@ def mudar_status(pedido: Pedido, status: str) -> None:
 
 async def marcar_comprovante(pedido_id: int | None) -> None:
     if pedido_id:
-        await Pedido.objects.filter(
+        alterados = await Pedido.objects.filter(
             pk=pedido_id, status=Pedido.Status.AGUARDANDO_PAGAMENTO,
         ).aupdate(status=Pedido.Status.COMPROVANTE_RECEBIDO, atualizado_em=timezone.now())
+        if alterados:
+            await auditoria.aregistrar_bot(
+                auditoria.Tipo.PEDIDO, 'pedido_status',
+                f'Pedido #{pedido_id}: comprovante recebido pelo bot', alvo=('pedido', pedido_id),
+                mudancas={'Status': [
+                    Pedido.Status.AGUARDANDO_PAGAMENTO.label, Pedido.Status.COMPROVANTE_RECEBIDO.label,
+                ]},
+            )

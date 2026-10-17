@@ -94,6 +94,13 @@ async def garantir_atualizado() -> dict:
     return _cache
 
 
+def atualizado() -> dict:
+    """Versão síncrona de `garantir_atualizado()`, para as views do painel."""
+    if _sujo or time.monotonic() - _carregado_em > _TTL_SEGUNDOS:
+        recarregar()
+    return _cache
+
+
 # ── Validação do carrinho fechado pela IA ──
 
 

@@ -66,6 +66,10 @@ h2 { font-size: 15px; margin: 0 0 12px; font-weight: 650; }
 }
 .marca { font-weight: 700; font-size: 17px; padding: 4px 10px 16px; }
 .marca span { color: var(--muted); font-weight: 500; font-size: 12px; display: block; }
+.status-loja { display: inline-flex; align-items: center; gap: 7px; align-self: flex-start; margin: -8px 10px 12px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--good-soft); color: var(--good); white-space: nowrap; }
+.status-loja::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.status-loja.fechada { background: var(--bad-soft); color: var(--bad); }
+.status-loja:hover { text-decoration: none; filter: brightness(.97); }
 .nav a {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 8px 10px; border-radius: 8px; color: var(--text-2); font-weight: 500;
@@ -143,6 +147,7 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
   body { grid-template-columns: 1fr; }
   .lateral { position: static; height: auto; flex-direction: row; align-items: center; overflow-x: auto; padding: 8px 12px; gap: 2px; border-right: 0; border-bottom: 1px solid var(--border); }
   .marca { padding: 0 8px 0 0; font-size: 15px; } .marca span { display: none; }
+  .status-loja { margin: 0 6px 0 0; align-self: center; }
   .nav { display: flex; gap: 2px; }
   .lateral .rodape { margin: 0 0 0 auto; white-space: nowrap; display: flex; gap: 12px; align-items: center; }
   .lateral .rodape .usuario { display: none; }
@@ -157,15 +162,19 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
 <aside class="lateral">
   <div class="marca">Robopod<span>Painel da loja</span></div>
+  <a href="{% url 'painel:inicio' %}" id="status-loja" class="status-loja{% if not contadores.expediente_aberto %} fechada{% endif %}"
+     title="Abrir ou encerrar o expediente na aba Início">{% if contadores.expediente_aberto %}Loja aberta{% else %}Loja fechada{% endif %}</a>
   <nav class="nav">
-    <a href="{% url 'painel:dashboard' %}" class="{% if secao == 'dashboard' %}ativo{% endif %}">Dashboard</a>
+    <a href="{% url 'painel:inicio' %}" class="{% if secao == 'inicio' %}ativo{% endif %}">Início</a>
     <a href="{% url 'painel:conversas' %}" class="{% if secao == 'conversas' %}ativo{% endif %}">Conversas
       <span class="badge" id="badge-atendente" data-n="{{ contadores.aguardando_atendente }}" title="Aguardando atendente">{{ contadores.aguardando_atendente }}</span></a>
     <a href="{% url 'painel:pedidos' %}" class="{% if secao == 'pedidos' %}ativo{% endif %}">Pedidos
       <span class="badge" id="badge-pedidos" data-n="{{ contadores.pedidos_conferir }}" title="Comprovantes a conferir">{{ contadores.pedidos_conferir }}</span></a>
-    <a href="{% url 'painel:clientes' %}" class="{% if secao == 'clientes' %}ativo{% endif %}">Clientes</a>
     <a href="{% url 'painel:estoque' %}" class="{% if secao == 'estoque' %}ativo{% endif %}">Estoque</a>
+    <a href="{% url 'painel:clientes' %}" class="{% if secao == 'clientes' %}ativo{% endif %}">Clientes</a>
+    <a href="{% url 'painel:dashboard' %}" class="{% if secao == 'dashboard' %}ativo{% endif %}">Dashboard</a>
     <a href="{% url 'painel:configuracoes' %}" class="{% if secao == 'configuracoes' %}ativo{% endif %}">Configurações</a>
+    {% if user.is_superuser %}<a href="{% url 'painel:auditoria' %}" class="{% if secao == 'auditoria' %}ativo{% endif %}">Auditoria</a>{% endif %}
   </nav>
   <div class="rodape">
     <div class="usuario">{{ user.get_username }}</div>
@@ -308,6 +317,11 @@ window.alertasSom = (function () {
     for (const [id, n] of [['badge-atendente', c.aguardando_atendente], ['badge-pedidos', c.pedidos_conferir]]) {
       const el = document.getElementById(id);
       if (el) { el.textContent = n; el.dataset.n = n; }
+    }
+    const loja = document.getElementById('status-loja');
+    if (loja && typeof c.expediente_aberto === 'boolean') {
+      loja.classList.toggle('fechada', !c.expediente_aberto);
+      loja.textContent = c.expediente_aberto ? 'Loja aberta' : 'Loja fechada';
     }
     const total = c.aguardando_atendente + c.pedidos_conferir;
     document.title = total ? `(${total}) ${tituloBase}` : tituloBase;

@@ -6,7 +6,9 @@ from . import views
 app_name = 'painel'
 
 urlpatterns = [
-    path('', views.dashboard, name='dashboard'),
+    path('', views.inicio, name='inicio'),
+    path('expediente/', views.expediente, name='expediente'),
+    path('dashboard/', views.dashboard, name='dashboard'),
     path('entrar/', auth_views.LoginView.as_view(
         template_name='painel/login.html', redirect_authenticated_user=True,
     ), name='login'),
@@ -34,4 +36,8 @@ urlpatterns = [
     path('estoque/categorias/', views.categorias, name='categorias'),
 
     path('configuracoes/', views.configuracoes, name='configuracoes'),
+    path('configuracoes/cardapio.pdf', views.cardapio_pdf, name='cardapio_pdf'),
+    path('configuracoes/respostas-rapidas/', views.respostas_rapidas, name='respostas_rapidas'),
+
+    path('auditoria/', views.auditoria_lista, name='auditoria'),
 ]

@@ -7,4 +7,4 @@ class PainelConfig(AppConfig):
     verbose_name = 'Painel da loja'
 
     def ready(self):
-        from . import catalogo  # noqa: F401 — conecta os sinais de invalidação
+        from . import auditoria, catalogo  # noqa: F401 — conectam os sinais (login e invalidação)

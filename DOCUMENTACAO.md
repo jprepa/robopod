@@ -128,6 +128,31 @@ comprovante recebido e falha no frete.
 Mensagens enviadas dentro de grupos são ignoradas pelo bot, então a equipe pode
 conversar no grupo à vontade.
 
+### 3.4.1. Cardápio em PDF
+
+Em **Configurações › Cardápio em PDF**, envie o PDF do cardápio (até 30 MB). Ele vai
+para todo cliente novo junto das boas-vindas, antes da lista de modelos e preços. O
+arquivo fica em `media/cardapio/` na pasta do projeto (fora do git) e pode ser trocado
+ou removido ali mesmo.
+
+Quem fica mais de 4 horas sem falar com o bot recebe as boas-vindas de novo na
+próxima mensagem.
+
+### 3.4.2. Aba Início e expediente
+
+A aba **Início** (primeira do menu, abre depois do login) junta o que precisa de
+atenção agora: clientes esperando atendente, comprovantes para conferir, pedidos pagos
+esperando sair, pedidos sem pagamento há mais de 30 min, itens esgotados, o movimento
+do dia por hora e os pedidos em andamento. Atualiza sozinha a cada 20 segundos.
+
+O botão **Encerrar expediente** pausa o bot: quem mandar mensagem recebe só a
+*mensagem de loja fechada* com o horário de atendimento (editáveis ali mesmo, com
+prévia). Cada cliente recebe esse aviso no máximo uma vez a cada 3 horas. Pedidos já em
+andamento (endereço, frete, comprovante) e conversas com atendente seguem normalmente.
+O selo **Loja aberta / Loja fechada** abaixo do nome no menu mostra o estado em todas
+as telas. Ao **Abrir a loja**, a Início lista quem chamou enquanto estava fechada e
+ainda não teve resposta, para a equipe chamar de volta.
+
 ### 3.5. Chave PIX
 
 ```env
@@ -383,7 +408,8 @@ robopod/
     └── notificacoes.py       # WhatsApp (Evolution) e avisos no grupo da equipe
 │
 └── painel/                   # Painel da loja (/painel/)
-    ├── models.py             # Cliente, Categoria, Produto, Variante, Pedido, ItemPedido, Mensagem
+    ├── models.py             # Cliente, Categoria, Produto, Variante, Pedido, ItemPedido, Mensagem, RegistroAuditoria
+    ├── auditoria.py          # Registro de quem fez o quê (aba Auditoria)
     ├── catalogo.py           # Cardápio do banco p/ o bot (cache + validação do carrinho)
     ├── servicos.py           # Clientes, histórico, pedidos e estoque
     ├── views.py / urls.py    # Telas do painel
@@ -438,10 +464,11 @@ Content-Type: application/json
 | Seção | O que faz |
 |-------|-----------|
 | **Dashboard** | Faturamento de hoje e do período (7/30/90 dias) com variação, gráfico de faturamento por dia, mais vendidos, estoque baixo e alertas (conversas aguardando atendente, comprovantes a conferir). Conta só pedidos pagos/em entrega/entregues. O "dia" vira às `PAINEL_VIRADA_DIA_HORA` (padrão 6h), então a venda da 01h entra na noite anterior. |
-| **Conversas** | Caixa de entrada atualizada a cada 10 s, com filtros (aguardando atendente, não lidas, com pedido aberto) e busca por nome/número. Dentro da conversa, as mensagens novas aparecem sozinhas e dá para responder pelo painel (sai pelo WhatsApp da loja), usar respostas rápidas, **assumir** a conversa (o bot para de responder) ou **devolver ao bot**. |
+| **Conversas** | Caixa de entrada atualizada a cada 10 s, com filtros (aguardando atendente, não lidas, com pedido aberto) e busca por nome/número. Dentro da conversa, as mensagens novas aparecem sozinhas e dá para responder pelo painel (sai pelo WhatsApp da loja), usar respostas rápidas (botões ou `/comando`; veja abaixo), **assumir** a conversa (o bot para de responder) ou **devolver ao bot**. |
 | **Clientes** | Cadastro por número, criado automaticamente na primeira mensagem (com o nome do perfil do WhatsApp). Mostra total gasto, nº de pedidos, último pedido e o que mais pede. Dá para editar nome/observações e **bloquear** o número (o bot passa a ignorá-lo). |
 | **Pedidos** | Criados automaticamente quando o frete é cotado. Status: aguardando pagamento → comprovante recebido → pago → saiu para entrega → entregue (ou cancelado). Cada mudança pode avisar o cliente no WhatsApp; cancelar devolve o estoque; entregue/cancelado devolve a conversa ao bot. |
 | **Estoque** | Cardápio do bot: categorias, produtos, preços, sabores/opções e estoque, com ajuste rápido (+/−, preço, ocultar). Vale na hora para o bot. Estoque vazio = não controla; zerado ou oculto some do cardápio. O pedido reserva o estoque ao ser criado. |
+| **Auditoria** | Só para superusuários. Registra quem fez cada ação, quando e de qual IP: logins (inclusive senha errada), respostas e assumir/devolver conversa, edição e bloqueio de cliente, mudança de status, venda manual, ajustes de estoque/preço, produtos, categorias e configurações. Mostra o antes → depois de cada campo e tem link para o item. Também registra o que o **Bot** faz sozinho (pedido criado, comprovante recebido). Cliques seguidos no +/− do estoque viram um registro só. Os registros não podem ser editados nem apagados (no admin ficam só para leitura). |
 
 Para trocar o cardápio inteiro de uma vez (modelos, preços e sabores), edite
 `cardapio.txt` e rode `python manage.py importar_cardapio` (`--simular` mostra antes o
@@ -449,6 +476,22 @@ que muda). Sabor com ❌ no começo da linha entra esgotado (estoque 0).
 
 O bot agora usa o **preço do banco** (não o que a IA escreveu) e confere o estoque
 ao fechar o pedido. Se faltar algo, avisa o cliente e pede para ajustar.
+
+#### Respostas rápidas no chat
+
+Na conversa, digite `/` na caixa de resposta para abrir o menu de comandos
+(↑↓ escolhe, Enter/Tab insere, Esc fecha). O texto entra onde está o cursor e
+pode ser editado antes de enviar.
+
+- **Respostas rápidas** (`/oi`, `/pix`, `/obrigado`, `/rastreio`…): criadas em
+  *Configurações → Respostas rápidas* ou direto no chat pelo botão **＋ Nova** (que
+  aproveita o texto já digitado). Podem virar botão acima da caixa e aceitam as
+  variáveis `{nome}` (primeiro nome), `{pix}`, `{endereco}`, `{pedido}` (#nº),
+  `{total}` e `{horario}`.
+- **Dados do cliente**: `/nome`, `/endereco` e `/pedido` (resumo do pedido em
+  andamento com itens e total).
+- **Modelos do cardápio**: `/` + parte do nome (`/elf45k`, `/v35`) insere o preço e
+  os sabores em estoque, no mesmo formato que o bot usa.
 
 ---
 

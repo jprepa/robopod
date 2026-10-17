@@ -1,0 +1,67 @@
+{% extends 'painel/base.html' %}
+{% block titulo %}Respostas rápidas{% endblock %}
+{% block estilo %}
+.texto-previa { white-space: pre-line; max-width: 420px; color: var(--muted); font-size: 13px; }
+.variaveis code { font-size: 12px; }
+{% endblock %}
+{% block conteudo %}
+<div class="topo">
+  <h1>Respostas rápidas</h1>
+  <a class="btn" href="{% url 'painel:configuracoes' %}">← Configurações</a>
+</div>
+<div class="grade g-3-1">
+  <section class="cartao tabela-wrap" style="padding:0">
+    <table>
+      <thead><tr><th>Comando</th><th>Botão</th><th>Mensagem</th><th class="num">Ordem</th><th></th></tr></thead>
+      <tbody>
+      {% for r in respostas %}
+        <tr>
+          <td><code>/{{ r.atalho }}</code>{% if not r.ativo %} <span class="tag cancelado">desativada</span>{% endif %}</td>
+          <td>{% if r.mostrar_botao %}{{ r.titulo }}{% else %}<span class="muted">só comando</span>{% endif %}</td>
+          <td><div class="texto-previa">{{ r.texto|truncatechars:160 }}</div></td>
+          <td class="num">{{ r.ordem }}</td>
+          <td class="num">
+            <a class="btn peq" href="?editar={{ r.pk }}">Editar</a>
+            <form method="post" style="display:inline">{% csrf_token %}
+              <button class="btn peq perigo" name="excluir" value="{{ r.pk }}" onclick="return confirm('Excluir a resposta /{{ r.atalho }}?')">Excluir</button>
+            </form>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="vazio">Nenhuma resposta rápida. Crie a primeira ao lado.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <section class="cartao">
+    <h2>{% if editando %}Editar /{{ editando.atalho }}{% else %}Nova resposta rápida{% endif %}</h2>
+    <form method="post" class="grade" style="gap:12px">
+      {% csrf_token %}
+      <div class="campo"><label for="id_titulo">Nome do botão</label>{{ form.titulo }}{% for e in form.titulo.errors %}<div class="erro">{{ e }}</div>{% endfor %}</div>
+      <div class="campo"><label for="id_atalho">Comando</label>{{ form.atalho }}
+        <div class="ajuda">Digitado no chat com barra. Ex.: <code>obrigado</code> → <code>/obrigado</code></div>
+        {% for e in form.atalho.errors %}<div class="erro">{{ e }}</div>{% endfor %}</div>
+      <div class="campo"><label for="id_texto">Mensagem</label>{{ form.texto }}{% for e in form.texto.errors %}<div class="erro">{{ e }}</div>{% endfor %}
+        <div class="ajuda variaveis">Variáveis trocadas pelos dados do cliente:
+          <code>{nome}</code> <code>{pix}</code> <code>{endereco}</code> <code>{pedido}</code> <code>{total}</code> <code>{horario}</code></div></div>
+      <div class="campo"><label for="id_ordem">Ordem</label>{{ form.ordem }}</div>
+      <div class="campo"><label>{{ form.mostrar_botao }} Mostrar como botão no chat</label></div>
+      <div class="campo"><label>{{ form.ativo }} Ativa</label></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn primario" type="submit">Salvar</button>
+        {% if editando %}<a class="btn" href="{% url 'painel:respostas_rapidas' %}">Cancelar</a>{% endif %}
+      </div>
+    </form>
+  </section>
+  <section class="cartao" style="grid-column: 1 / -1">
+    <h2>Comandos que já vêm prontos</h2>
+    <p class="muted" style="margin-top:0">No chat, digite <code>/</code> para ver tudo. Além das respostas acima:</p>
+    <ul style="margin:0;padding-left:18px;line-height:1.8">
+      <li><code>/nome</code> — primeiro nome do cliente</li>
+      <li><code>/endereco</code> — endereço de entrega do pedido em andamento (ou o último usado)</li>
+      <li><code>/pedido</code> — resumo do pedido em andamento, com itens e total</li>
+      <li><code>/</code> + nome do modelo (ex.: <code>/elf45k</code>, <code>/v35</code>) — preço e lista de sabores em estoque do modelo, igual o bot manda</li>
+    </ul>
+  </section>
+</div>
+{% endblock %}

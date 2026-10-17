@@ -1,0 +1,187 @@
+{% load painel_tags %}
+<div class="inicio-grade">
+  <div class="grade" style="align-content:start">
+
+    <section class="cartao">
+      <h2>Precisa de você {% if alertas %}<span class="badge" data-n="{{ alertas }}">{{ alertas }}</span>{% endif %}</h2>
+      <ul class="pendencias">
+        {% for a in atendente %}{% if a.sem_resposta %}
+        <li class="urgente">
+          <span class="ic" aria-hidden="true">🙋</span>
+          <div><b>{{ a.nome }}</b> está esperando atendente<div class="meta">há {{ a.desde|timesince }}</div></div>
+          <a class="btn peq primario" href="{% url 'painel:conversa' a.telefone %}">Responder</a>
+        </li>
+        {% endif %}{% endfor %}
+
+        {% for p in comprovantes %}
+        <li class="urgente">
+          <span class="ic" aria-hidden="true">🧾</span>
+          <div>Comprovante do <b>pedido #{{ p.pk }}</b> para conferir<div class="meta">{{ p.cliente.nome_exibicao|default:"Balcão" }} · {{ p.total|brl }} · há {{ p.atualizado_em|timesince }}</div></div>
+          <a class="btn peq primario" href="{% url 'painel:pedido' p.pk %}">Conferir</a>
+        </li>
+        {% endfor %}
+
+        {% for p in prontos %}
+        <li class="atencao">
+          <span class="ic" aria-hidden="true">📦</span>
+          <div><b>Pedido #{{ p.pk }}</b> pago, aguardando sair para entrega<div class="meta">{{ p.cliente.nome_exibicao|default:"Balcão" }}{% if p.endereco %} · {{ p.endereco|truncatechars:48 }}{% endif %}</div></div>
+          <form method="post" action="{% url 'painel:pedido_status' p.pk %}">
+            {% csrf_token %}
+            <input type="hidden" name="status" value="em_entrega">
+            {% if p.origem != 'manual' %}<input type="hidden" name="avisar" value="1">{% endif %}
+            <input type="hidden" name="voltar" value="{% url 'painel:inicio' %}">
+            <button class="btn peq" type="submit" title="Muda o status{% if p.origem != 'manual' %} e avisa o cliente no WhatsApp{% endif %}">🛵 Saiu</button>
+          </form>
+        </li>
+        {% endfor %}
+
+        {% if chamaram_fechado %}
+        <li class="{% if config.expediente_aberto %}atencao{% else %}info{% endif %}">
+          <span class="ic" aria-hidden="true">🌙</span>
+          <div>
+            <b>{{ chamaram_fechado|length }} cliente{{ chamaram_fechado|length|pluralize }}</b> {% if chamaram_fechado|length == 1 %}chamou{% else %}chamaram{% endif %} com a loja fechada{% if config.expediente_aberto %} — vale chamar de volta{% endif %}
+            <div class="nomes">{% for c in chamaram_fechado|slice:":8" %}<a class="chip" href="{% url 'painel:conversa' c.telefone %}">{{ c.nome }}</a>{% endfor %}{% if chamaram_fechado|length > 8 %}<span class="muted peq">+{{ chamaram_fechado|length|add:"-8" }}</span>{% endif %}</div>
+          </div>
+        </li>
+        {% endif %}
+
+        {% for p in pagamento_atrasado %}
+        <li class="atencao">
+          <span class="ic" aria-hidden="true">⏳</span>
+          <div><b>Pedido #{{ p.pk }}</b> sem pagamento há {{ p.criado_em|timesince }}<div class="meta">{{ p.cliente.nome_exibicao|default:"Balcão" }} · {{ p.total|brl }} · o estoque segue reservado</div></div>
+          <a class="btn peq" href="{% url 'painel:pedido' p.pk %}">Ver</a>
+        </li>
+        {% endfor %}
+
+        {% if esgotados %}
+        <li class="atencao">
+          <span class="ic" aria-hidden="true">🚫</span>
+          <div><b>{{ esgotados|length }} ite{{ esgotados|length|pluralize:"m,ns" }} esgotado{{ esgotados|length|pluralize }}</b><div class="meta">{% for e in esgotados|slice:":6" %}{{ e.nome }}{% if not forloop.last %}, {% endif %}{% endfor %}{% if esgotados|length > 6 %} e mais {{ esgotados|length|add:"-6" }}{% endif %}</div></div>
+          <a class="btn peq" href="{% url 'painel:estoque' %}?baixo=1">Repor</a>
+        </li>
+        {% endif %}
+
+        {% if baixos %}
+        <li class="info">
+          <span class="ic" aria-hidden="true">📉</span>
+          <div>{{ baixos|length }} ite{{ baixos|length|pluralize:"m,ns" }} com estoque baixo<div class="meta">{% for e in baixos|slice:":5" %}{{ e.nome }} ({{ e.estoque }}){% if not forloop.last %}, {% endif %}{% endfor %}{% if baixos|length > 5 %}…{% endif %}</div></div>
+          <a class="btn peq" href="{% url 'painel:estoque' %}?baixo=1">Ver</a>
+        </li>
+        {% endif %}
+
+        {% if atendente_respondidas %}
+        <li class="info">
+          <span class="ic" aria-hidden="true">🧑</span>
+          <div>{{ atendente_respondidas }} conversa{{ atendente_respondidas|pluralize }} em atendimento humano, já respondida{{ atendente_respondidas|pluralize }}<div class="meta">O bot fica em silêncio até devolverem a conversa</div></div>
+          <a class="btn peq" href="{% url 'painel:conversas' %}?filtro=atendente">Ver</a>
+        </li>
+        {% endif %}
+
+        {% if nao_lidas %}
+        <li class="info">
+          <span class="ic" aria-hidden="true">💬</span>
+          <div>{{ nao_lidas }} conversa{{ nao_lidas|pluralize }} com mensagens não lidas<div class="meta">O bot já está respondendo, é só para acompanhar</div></div>
+          <a class="btn peq" href="{% url 'painel:conversas' %}?filtro=nao_lidas">Abrir</a>
+        </li>
+        {% endif %}
+      </ul>
+      {% if not alertas and not baixos and not nao_lidas and not atendente %}
+      <div class="tudo-certo"><span aria-hidden="true">✨</span><b>Tudo em dia</b><span class="muted">Nenhuma pendência agora. Atualiza sozinho a cada 20 segundos.</span></div>
+      {% endif %}
+    </section>
+
+    <section class="cartao">
+      <div class="topo" style="margin-bottom:12px">
+        <h2 style="margin:0">Pedidos em andamento</h2>
+        <a class="peq" href="{% url 'painel:pedidos' %}?status=abertos">Ver todos →</a>
+      </div>
+      <div class="funil">
+        {% for f in funil %}
+        <a class="etapa {{ f.status }}" href="{% url 'painel:pedidos' %}?status={{ f.status }}">
+          <span class="n">{{ f.n }}</span>
+          <span class="r">{{ f.rotulo }}</span>
+          <span class="v">{% if f.n %}{{ f.valor|brl }}{% else %}&nbsp;{% endif %}</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% if andamento %}
+      <div class="tabela-wrap" style="margin-top:12px">
+        <table>
+          <thead><tr><th>Pedido</th><th>Cliente</th><th class="num">Total</th><th>Status</th><th>Há</th><th></th></tr></thead>
+          <tbody>
+          {% for p in andamento %}
+            <tr>
+              <td><a href="{% url 'painel:pedido' p.pk %}">#{{ p.pk }}</a></td>
+              <td class="cli">{{ p.cliente.nome_exibicao|default:"Balcão" }}<div class="muted peq itens">{% for i in p.itens.all|slice:":2" %}{{ i.quantidade }}× {{ i.nome|truncatechars:28 }}{% if not forloop.last %}, {% endif %}{% endfor %}{% if p.itens.all|length > 2 %}…{% endif %}</div></td>
+              <td class="num" style="white-space:nowrap">{{ p.total|brl }}</td>
+              <td><span class="tag {{ p.status }}">{{ p.get_status_display }}</span></td>
+              <td class="muted peq" style="white-space:nowrap">{{ p.criado_em|timesince }}</td>
+              <td class="num">
+                {% if p.proximo %}
+                <form method="post" action="{% url 'painel:pedido_status' p.pk %}" style="display:inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="status" value="{{ p.proximo }}">
+                  {% if p.origem != 'manual' %}<input type="hidden" name="avisar" value="1">{% endif %}
+                  <input type="hidden" name="voltar" value="{% url 'painel:inicio' %}">
+                  <button class="btn peq" type="submit" title="Muda o status{% if p.origem != 'manual' %} e avisa o cliente no WhatsApp{% endif %}">→ {{ p.proximo_rotulo }}</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="vazio" style="padding:18px">Nenhum pedido em andamento.</div>
+      {% endif %}
+    </section>
+  </div>
+
+  <div class="grade" style="align-content:start">
+    <section class="cartao">
+      <h2>Hoje <span class="muted peq">(dia vira às {{ virada }}h)</span></h2>
+      <div class="hoje">
+        <div><div class="rotulo">Faturamento</div><div class="valor">{{ hoje.total|brl }}</div></div>
+        <div><div class="rotulo">Pedidos pagos</div><div class="valor">{{ hoje.pedidos }}</div></div>
+        <div><div class="rotulo">Ticket médio</div><div class="valor peq-valor">{{ hoje.ticket|brl }}</div></div>
+        <div><div class="rotulo">vs. semana passada</div><div class="valor peq-valor">
+          {% if variacao is not None %}<span class="{% if variacao >= 0 %}sobe{% else %}desce{% endif %}">{% if variacao >= 0 %}▲ +{% else %}▼ {% endif %}{{ variacao|floatformat:0 }}%</span>{% else %}<span class="muted">—</span>{% endif %}
+        </div></div>
+      </div>
+      <div class="muted peq" style="margin-top:6px">Comparando com {{ semana_passada.total|brl }} no mesmo dia da semana passada, até este horário.</div>
+    </section>
+
+    <section class="cartao">
+      <h2>Movimento de hoje <span class="muted peq">mensagens de clientes por hora</span></h2>
+      <div class="horas" role="img" aria-label="Mensagens de clientes por hora hoje">
+        {% for h in movimento %}
+        <div class="hora{% if h.atual %} atual{% endif %}" title="{{ h.hora }}h: {{ h.mensagens }} mensage{{ h.mensagens|pluralize:'m,ns' }}{% if h.pedidos %}, {{ h.pedidos }} pedido{{ h.pedidos|pluralize }}{% endif %}">
+          <span class="ped">{% if h.pedidos %}{{ h.pedidos }}{% endif %}</span>
+          <span class="barra" style="height: {% if h.mensagens %}max(3px, {{ h.altura }}%){% else %}2px{% endif %}"></span>
+          <span class="h">{% if forloop.counter0|divisibleby:3 %}{{ h.hora }}h{% endif %}</span>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="muted peq" style="margin-top:6px"><span class="leg-ped">2</span> = pedidos feitos naquela hora</div>
+    </section>
+
+    <section class="cartao">
+      <div class="topo" style="margin-bottom:8px">
+        <h2 style="margin:0">Conversas recentes</h2>
+        <a class="peq" href="{% url 'painel:conversas' %}">Todas →</a>
+      </div>
+      <ul class="recentes">
+        {% for c in conversas_recentes %}
+        <li><a href="{% url 'painel:conversa' c.telefone %}">
+          <span class="nome">{{ c.nome_exibicao }}{% if c.estado == 'atendimento_humano' %} <span class="tag humano">atendente</span>{% endif %}</span>
+          <span class="quando">{% if c.nao_lidas %}<span class="badge" data-n="{{ c.nao_lidas }}">{{ c.nao_lidas }}</span>{% else %}{{ c.ultima_mensagem_em|date:"H:i" }}{% endif %}</span>
+          <span class="previa">{% if c.ultima_autor == 'bot' %}🤖 {% elif c.ultima_autor == 'atendente' %}🧑 {% endif %}{{ c.ultima_texto|sem_formatacao|truncatechars:70 }}</span>
+        </a></li>
+        {% empty %}
+        <li class="muted" style="padding:8px 0">Nenhuma conversa ainda.</li>
+        {% endfor %}
+      </ul>
+    </section>
+  </div>
+</div>

@@ -9,7 +9,9 @@ import asyncio
 import json
 import logging
 import re
+from datetime import timedelta
 
+from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.http import JsonResponse
 from django.utils import timezone
@@ -24,9 +26,10 @@ from .llm_service import (
 )
 from .notificacoes import (
     enviar_whatsapp, notificar_equipe,
-    enviar_lista_whatsapp, enviar_imagem_whatsapp,
+    enviar_lista_whatsapp, enviar_imagem_whatsapp, enviar_documento_whatsapp,
 )
 from painel import catalogo, servicos
+from painel.models import Configuracao
 
 from . import frete
 from .frete import cotar_frete
@@ -39,6 +42,10 @@ _tasks_background: set[asyncio.Task] = set()
 
 # Endereços não encontrados no mapa antes de passar para atendente
 _MAX_TENTATIVAS_ENDERECO = 2
+
+# Sem falar com o bot por mais que isso, a próxima mensagem abre uma conversa
+# nova (boas-vindas + cardápio). A loja abre 18h-03h: cobre "voltou outra noite".
+_NOVA_CONVERSA_APOS = timedelta(hours=4)
 
 # Palavras de saudação pura: se a primeira mensagem só tiver essas palavras,
 # respondemos apenas com boas-vindas + cardápio; senão ela também vai para a IA.
@@ -175,6 +182,41 @@ async def _enviar_cardapio(telefone: str) -> None:
     await enviar_whatsapp(telefone, gerar_menu_texto())
 
 
+async def _enviar_pdf_cardapio(telefone: str) -> None:
+    """Envia o PDF do cardápio, se houver um carregado em Painel > Configurações."""
+    config = await Configuracao.aobter()
+    if not config.cardapio_pdf:
+        return
+
+    def _ler() -> bytes:
+        with config.cardapio_pdf.open('rb') as arquivo:
+            return arquivo.read()
+
+    try:
+        conteudo = await sync_to_async(_ler)()
+    except OSError:
+        logger.exception('PDF do cardápio não encontrado: %s', config.cardapio_pdf.name)
+        return
+    await enviar_documento_whatsapp(
+        telefone, conteudo, 'Cardápio Robopod.pdf', '📄 Nosso cardápio completo',
+    )
+
+
+_BOAS_VINDAS = (
+    'Olá! 👋 Bem-vindo à *Robopod* — Delivery Noturno de Tabacaria! 🌙\n\n'
+    'Aqui embaixo vai nosso cardápio com os modelos e preços. '
+    'É só me dizer qual modelo você quer que eu te mostro os sabores 😉\n\n'
+    '🙋 Prefere falar com uma pessoa? Digite *atendente* a qualquer momento.'
+)
+
+
+async def _enviar_boas_vindas(telefone: str) -> None:
+    """Primeiro contato: boas-vindas (com a opção de atendente), PDF e modelos."""
+    await enviar_whatsapp(telefone, _BOAS_VINDAS)
+    await _enviar_pdf_cardapio(telefone)
+    await _enviar_cardapio(telefone)
+
+
 async def _transferir_para_humano(sessao: SessaoChat, motivo: str) -> None:
     """Coloca a sessão em atendimento humano, avisa o cliente e a equipe."""
     sessao.estado_atual = SessaoChat.Estado.ATENDIMENTO_HUMANO
@@ -300,17 +342,27 @@ async def _handler_atendimento_llm(
     sessao: SessaoChat, texto: str,
 ) -> None:
     """Processa mensagem no estado de atendimento via LLM."""
+    # Voltou depois de muito tempo (ex.: na noite seguinte): conversa nova,
+    # com boas-vindas e cardápio de novo em vez de seguir o papo antigo.
+    if (
+        sessao.historico_mensagens
+        and timezone.now() - sessao.ultima_interacao > _NOVA_CONVERSA_APOS
+    ):
+        sessao.resetar_sessao()
+
+    # "atendente" é anunciado nas boas-vindas: vai direto, sem passar pela IA
+    if _normalizar(texto) in ('atendente', 'humano'):
+        await _transferir_para_humano(sessao, 'Cliente digitou atendente')
+        return
+
     # Primeira mensagem da sessão — boas-vindas + cardápio
     if not sessao.historico_mensagens:
-        boas_vindas = (
-            'Olá! 👋 Bem-vindo à *Robopod* — Delivery Noturno de Tabacaria! 🌙\n\n'
-            'Confira nosso cardápio abaixo. Se preferir falar com uma pessoa, '
-            'é só digitar *atendente*.'
-        )
-        await enviar_whatsapp(sessao.telefone, boas_vindas)
-        await _enviar_cardapio(sessao.telefone)
+        await _enviar_boas_vindas(sessao.telefone)
         historico_inicial = [
-            {'role': 'assistant', 'content': boas_vindas + '\n[Cardápio enviado ao cliente]'},
+            {
+                'role': 'assistant',
+                'content': _BOAS_VINDAS + '\n[Cardápio com os modelos e preços enviado ao cliente]',
+            },
         ]
 
         # "Oi" / "boa noite": já respondemos. Se o cliente já pediu algo
@@ -607,11 +659,8 @@ async def _handler_aguardando_comprovante(
         sessao.ultima_interacao = timezone.now()
         await sessao.asave(update_fields=['estado_atual', 'ultima_interacao'])
         await servicos.marcar_comprovante(sessao.carrinho_temporario.get('pedido_id'))
-        await enviar_whatsapp(
-            sessao.telefone,
-            '🙌 Comprovante recebido! Vamos conferir o pagamento e já '
-            'despachamos seu pedido. 🛵',
-        )
+        # Sem resposta automática: a conversa passa direto para o atendimento,
+        # que confirma o pagamento avançando o status do pedido.
         total = sessao.carrinho_temporario.get('total')
         await notificar_equipe(
             f'💸 *Comprovante recebido — conferir pagamento e chamar a entrega*\n'
@@ -681,6 +730,33 @@ _AVISO_HUMANO = (
 )
 
 
+# Com a loja fechada, o mesmo cliente só recebe o aviso de novo depois disso
+_REPETIR_AVISO_FECHADO_APOS = timedelta(hours=3)
+
+
+async def _loja_fechada_respondeu(telefone: str) -> bool:
+    """Expediente encerrado no painel: responde com a mensagem de loja fechada.
+
+    Pedidos em andamento (endereço, frete, comprovante) e conversas com
+    atendente seguem normalmente, para ninguém ficar no meio do caminho.
+    Retorna True se a mensagem já foi tratada aqui.
+    """
+    config = await Configuracao.aobter()
+    if config.expediente_aberto:
+        return False
+    sessao = await SessaoChat.objects.filter(telefone=telefone).afirst()
+    if sessao is not None and sessao.estado_atual != SessaoChat.Estado.ATENDIMENTO_LLM:
+        return False
+
+    texto = config.texto_fechado
+    desde = timezone.now() - _REPETIR_AVISO_FECHADO_APOS
+    if config.expediente_fechado_em and config.expediente_fechado_em > desde:
+        desde = config.expediente_fechado_em
+    if not await servicos.bot_enviou_desde(telefone, texto, desde):
+        await enviar_whatsapp(telefone, texto)
+    return True
+
+
 # ── Mapa de handlers por estado ──
 _HANDLERS = {
     SessaoChat.Estado.ATENDIMENTO_LLM: _handler_atendimento_llm,
@@ -726,6 +802,9 @@ async def evolution_webhook(request) -> JsonResponse:
     if cliente is not None and cliente.bloqueado:
         logger.info('Cliente %s bloqueado, mensagem ignorada', telefone)
         return JsonResponse({'status': 'cliente bloqueado'})
+
+    if await _loja_fechada_respondeu(telefone):
+        return JsonResponse({'status': 'loja fechada'})
 
     await catalogo.garantir_atualizado()
 

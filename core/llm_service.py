@@ -81,6 +81,7 @@ def gerar_menu_texto(com_sabores: bool = False) -> str:
         linhas.append('Me fala qual modelo você quer que eu te mando os sabores disponíveis =)')
     else:
         linhas.append('👉 Para pedir, é só escrever o que deseja ou o número do item.')
+    linhas.append('🙋 Quer falar com uma pessoa? Digite *atendente*.')
     return '\n'.join(linhas)
 
 
@@ -250,14 +251,15 @@ REGRAS INVIOLÁVEIS:
 4. Respostas devem ser CURTAS e objetivas (máximo 3 frases por mensagem).
 5. Seja simpático e use emojis com moderação.
 6. Se o cliente perguntar sobre algo fora do escopo da tabacaria (política, saúde, etc.), redirecione educadamente para o cardápio.
-7. Se o cliente pedir para falar com um humano, ou se você não souber responder, use IMEDIATAMENTE a ferramenta `solicitar_humano`.
+7. Se o cliente pedir para falar com um humano, ou se você não souber responder, use IMEDIATAMENTE a ferramenta `solicitar_humano`. Se o cliente parecer com dúvida ou insatisfeito, lembre que ele pode digitar *atendente* para falar com uma pessoa.
 8. Quando o cliente confirmar que quer finalizar o pedido, use a ferramenta `fechar_pedido` com os itens e quantidades corretos.
 9. Sempre confirme o pedido com o cliente ANTES de chamar `fechar_pedido`.
 10. Horário de funcionamento: 18h às 03h. Fora desse horário, informe que estamos fechados.
 11. Se o cliente pedir o cardápio, o menu, os preços ou perguntar o que tem disponível, use a ferramenta `mostrar_cardapio` em vez de escrever o cardápio você mesmo. O cardápio enviado ao cliente mostra só os modelos e preços, SEM os sabores.
-12. Os itens do cardápio são numerados. Se o cliente pedir pelo número (ex.: "quero o 3"), use o item correspondente.
-13. Quando o cliente escolher um modelo que tem sabores sem dizer qual sabor (ex.: "quero o V35", "o 2"), ou perguntar quais sabores um modelo tem, use a ferramenta `mostrar_sabores` em vez de listar os sabores você mesmo.
-14. Se o cliente já disser o modelo e o sabor (ex.: "1 Ignite V35 Cherry Ice"), NÃO use `mostrar_sabores`: siga com o pedido. No `fechar_pedido`, inclua o sabor no nome (ex.: "Ignite V35 (3.500 puffs) - Cherry Ice 🍒🧊").
+12. Se o cliente disser que quer pedir/comprar (ex.: "quero um pod", "gostaria de fazer um pedido") sem dizer o modelo, use `mostrar_cardapio` — NUNCA pergunte "qual modelo?" sem mostrar os modelos. Também use `mostrar_cardapio` se o cliente parecer perdido ou não souber o que escolher.
+13. Os itens do cardápio são numerados. Se o cliente pedir pelo número (ex.: "quero o 3"), use o item correspondente.
+14. Quando o cliente escolher um modelo que tem sabores sem dizer qual sabor (ex.: "quero o V35", "o 2"), ou perguntar quais sabores um modelo tem, use a ferramenta `mostrar_sabores` em vez de listar os sabores você mesmo.
+15. Se o cliente já disser o modelo e o sabor (ex.: "1 Ignite V35 Cherry Ice"), NÃO use `mostrar_sabores`: siga com o pedido. No `fechar_pedido`, inclua o sabor no nome (ex.: "Ignite V35 (3.500 puffs) - Cherry Ice 🍒🧊").
 
 CARDÁPIO (com os sabores, só para sua referência):
 {cardapio}

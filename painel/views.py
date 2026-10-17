@@ -1,6 +1,7 @@
 """Painel da loja: dashboard, conversas, clientes, pedidos e estoque."""
 
 import logging
+import re
 from collections import defaultdict
 from datetime import datetime, time, timedelta
 from datetime import timezone as dt_timezone
@@ -10,22 +11,28 @@ from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import Count, F, Max, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
-from django.http import HttpResponse, JsonResponse
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
+from django.utils.text import slugify
 from django.views.decorators.http import require_POST
 
+from core.llm_service import formatar_preco, gerar_sabores_texto
 from core.models import SessaoChat
 from core.notificacoes import enviar_whatsapp, listar_grupos_whatsapp, notificar_equipe
 
-from . import servicos
-from .forms import CategoriaForm, ClienteForm, ProdutoForm, VarianteFormSet
+from . import auditoria, catalogo, servicos
+from .auditoria import Tipo
+from .forms import CategoriaForm, ClienteForm, ProdutoForm, RespostaRapidaForm, VarianteFormSet
 from .models import (
-    Categoria, Cliente, Configuracao, ItemPedido, Mensagem, Pedido, Produto, Variante,
+    MENSAGEM_FECHADO_PADRAO, Categoria, Cliente, Configuracao, ItemPedido, Mensagem, Pedido, Produto, RegistroAuditoria,
+    RespostaRapida, Variante,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,6 +79,7 @@ def _contadores() -> dict:
         'pedidos_conferir': Pedido.objects.filter(
             status=Pedido.Status.COMPROVANTE_RECEBIDO,
         ).count(),
+        'expediente_aberto': Configuracao.obter().expediente_aberto,
     }
 
 
@@ -104,6 +112,241 @@ def contadores(request):
 
 def _render(request, template: str, contexto: dict) -> HttpResponse:
     return render(request, template, {**contexto, 'contadores': _contadores()})
+
+
+# ── Início: o que precisa de atenção agora + expediente ──
+
+# Pedido sem pagamento há mais que isso vira alerta (cliente pode ter desistido)
+_ALERTA_PAGAMENTO_APOS = timedelta(minutes=30)
+# Depois de abrir a loja, a lista de quem chamou com ela fechada fica visível por esse tempo
+_RETORNO_FECHADO_POR = timedelta(hours=12)
+_STATUS_ANDAMENTO = (*_ABERTOS, Pedido.Status.PAGO, Pedido.Status.EM_ENTREGA)
+
+
+def _saudacao(agora: datetime) -> str:
+    hora = timezone.localtime(agora).hour
+    if 5 <= hora < 12:
+        return 'Bom dia'
+    return 'Boa tarde' if 12 <= hora < 18 else 'Boa noite'
+
+
+def _clientes_por_telefone(telefones) -> dict:
+    return {c.telefone: c for c in Cliente.objects.filter(telefone__in=list(telefones))}
+
+
+def _aguardando_atendente() -> list[dict]:
+    """Conversas com atendente humano, quem está sem resposta primeiro."""
+    sessoes = list(SessaoChat.objects.filter(estado_atual=SessaoChat.Estado.ATENDIMENTO_HUMANO))
+    clientes = _clientes_por_telefone(s.telefone for s in sessoes)
+    # Última mensagem do cliente e do atendente (o aviso automático do bot não conta como resposta)
+    ultimas = (
+        Mensagem.objects.filter(
+            telefone__in=[s.telefone for s in sessoes],
+            autor__in=(Mensagem.Autor.CLIENTE, Mensagem.Autor.ATENDENTE),
+        )
+        .values('telefone', 'autor').annotate(m=Max('criado_em'))
+    )
+    ultima = {(u['telefone'], u['autor']): u['m'] for u in ultimas}
+    itens = []
+    for s in sessoes:
+        do_cliente = ultima.get((s.telefone, Mensagem.Autor.CLIENTE))
+        do_atendente = ultima.get((s.telefone, Mensagem.Autor.ATENDENTE))
+        sem_resposta = do_atendente is None or (do_cliente is not None and do_cliente > do_atendente)
+        cliente = clientes.get(s.telefone)
+        itens.append({
+            'telefone': s.telefone,
+            'nome': cliente.nome_exibicao if cliente else s.telefone,
+            'sem_resposta': sem_resposta,
+            # Ninguém respondeu ainda: espera desde a transferência; senão, desde a última mensagem dele
+            'desde': do_cliente if do_atendente and sem_resposta else s.ultima_interacao,
+        })
+    itens.sort(key=lambda i: (not i['sem_resposta'], i['desde']))
+    return itens
+
+
+def _chamaram_fechado(config: Configuracao, agora: datetime) -> list[dict]:
+    """Clientes que mandaram mensagem com a loja fechada. Com a loja aberta de
+    novo, ficam na lista até alguém (bot ou atendente) responder."""
+    if not config.expediente_fechado_em:
+        return []
+    if config.expediente_aberto:
+        aberto_em = config.expediente_aberto_em
+        if not aberto_em or aberto_em < config.expediente_fechado_em or agora - aberto_em > _RETORNO_FECHADO_POR:
+            return []
+        fim = aberto_em
+    else:
+        fim = agora
+    telefones = set(
+        Mensagem.objects.filter(
+            autor=Mensagem.Autor.CLIENTE, criado_em__gte=config.expediente_fechado_em, criado_em__lte=fim,
+        ).values_list('telefone', flat=True)
+    )
+    # Quem está com pedido em andamento ou com atendente não recebeu o aviso e já aparece em outro alerta
+    telefones -= set(
+        SessaoChat.objects.filter(telefone__in=telefones)
+        .exclude(estado_atual=SessaoChat.Estado.ATENDIMENTO_LLM).values_list('telefone', flat=True)
+    )
+    if config.expediente_aberto:
+        telefones -= set(
+            Mensagem.objects.filter(
+                telefone__in=telefones, criado_em__gt=fim,
+                autor__in=(Mensagem.Autor.BOT, Mensagem.Autor.ATENDENTE),
+            ).values_list('telefone', flat=True)
+        )
+    clientes = _clientes_por_telefone(telefones)
+    itens = [
+        {'telefone': t, 'nome': clientes[t].nome_exibicao if t in clientes else t,
+         'quando': clientes[t].ultima_mensagem_em if t in clientes else None}
+        for t in telefones if not (t in clientes and clientes[t].bloqueado)
+    ]
+    itens.sort(key=lambda i: i['quando'] or agora, reverse=True)
+    return itens
+
+
+def _movimento_por_hora(desde: datetime) -> list[dict]:
+    """Mensagens de clientes e pedidos por hora no dia comercial atual."""
+    horas = [(settings.PAINEL_VIRADA_DIA_HORA + i) % 24 for i in range(24)]
+    msgs = defaultdict(int)
+    for criado_em in Mensagem.objects.filter(
+        autor=Mensagem.Autor.CLIENTE, criado_em__gte=desde,
+    ).values_list('criado_em', flat=True):
+        msgs[timezone.localtime(criado_em).hour] += 1
+    pedidos = defaultdict(int)
+    for criado_em in Pedido.objects.filter(criado_em__gte=desde).exclude(
+        status=Pedido.Status.CANCELADO,
+    ).values_list('criado_em', flat=True):
+        pedidos[timezone.localtime(criado_em).hour] += 1
+    maximo = max(msgs.values(), default=0) or 1
+    agora = timezone.localtime().hour
+    return [
+        {'hora': h, 'mensagens': msgs[h], 'pedidos': pedidos[h],
+         'altura': round(msgs[h] / maximo * 100), 'atual': h == agora}
+        for h in horas
+    ]
+
+
+def _contexto_inicio() -> dict:
+    agora = timezone.now()
+    config = Configuracao.obter()
+    hoje = _dia_comercial(agora)
+    inicio_hoje = _inicio_dia(hoje)
+    faturados = Pedido.objects.filter(status__in=_FATURADOS)
+    resumo_hoje = _somar(faturados.filter(criado_em__gte=inicio_hoje))
+    # Mesmo dia da semana passada, até o mesmo horário: compara noite com noite
+    semana_passada = _somar(faturados.filter(
+        criado_em__gte=_inicio_dia(hoje - timedelta(days=7)), criado_em__lt=agora - timedelta(days=7),
+    ))
+    variacao = None
+    if semana_passada['total']:
+        variacao = float((resumo_hoje['total'] - semana_passada['total']) / semana_passada['total'] * 100)
+
+    andamento = list(
+        Pedido.objects.filter(status__in=_STATUS_ANDAMENTO).select_related('cliente')
+        .prefetch_related('itens').order_by('criado_em')
+    )
+    for p in andamento:
+        p.proximo = _PROXIMO_STATUS.get(p.status)
+        p.proximo_rotulo = Pedido.Status(p.proximo).label if p.proximo else ''
+    por_status = defaultdict(list)
+    for p in andamento:
+        por_status[p.status].append(p)
+    funil = [
+        {'status': s, 'rotulo': Pedido.Status(s).label, 'n': len(por_status[s]),
+         'valor': sum((p.total for p in por_status[s]), Decimal('0'))}
+        for s in _STATUS_ANDAMENTO
+    ]
+    pagamento_atrasado = [
+        p for p in por_status[Pedido.Status.AGUARDANDO_PAGAMENTO]
+        if agora - p.criado_em > _ALERTA_PAGAMENTO_APOS
+    ]
+
+    estoque = _estoque_baixo()
+    esgotados = [e for e in estoque if e['estoque'] <= 0]
+    baixos = [e for e in estoque if e['estoque'] > 0]
+    atendente = _aguardando_atendente()
+    chamaram = _chamaram_fechado(config, agora)
+    nao_lidas = _conversas_qs('nao_lidas', '').exclude(estado=SessaoChat.Estado.ATENDIMENTO_HUMANO).count()
+
+    alertas = (
+        sum(1 for a in atendente if a['sem_resposta'])
+        + len(por_status[Pedido.Status.COMPROVANTE_RECEBIDO])
+        + len(por_status[Pedido.Status.PAGO]) + len(pagamento_atrasado)
+        + len(esgotados) + len(chamaram)
+    )
+    return {
+        'config': config,
+        'saudacao': _saudacao(agora),
+        'agora': agora,
+        'hoje': resumo_hoje,
+        'semana_passada': semana_passada,
+        'variacao': variacao,
+        'movimento': _movimento_por_hora(inicio_hoje),
+        'virada': settings.PAINEL_VIRADA_DIA_HORA,
+        'atendente': atendente,
+        'atendente_respondidas': sum(1 for a in atendente if not a['sem_resposta']),
+        'comprovantes': por_status[Pedido.Status.COMPROVANTE_RECEBIDO],
+        'prontos': por_status[Pedido.Status.PAGO],
+        'pagamento_atrasado': pagamento_atrasado,
+        'alerta_pagamento_min': int(_ALERTA_PAGAMENTO_APOS.total_seconds() // 60),
+        'esgotados': esgotados,
+        'baixos': baixos,
+        'chamaram_fechado': chamaram,
+        'nao_lidas': nao_lidas,
+        'alertas': alertas,
+        'funil': funil,
+        'andamento': andamento[:10],
+        'conversas_recentes': _conversas_qs('', '')[:6],
+        'estados': dict(SessaoChat.Estado.choices),
+    }
+
+
+@login_required
+def inicio(request):
+    contexto = _contexto_inicio()
+    # Atualização automática (HTMX) só do miolo: o formulário do expediente fica intacto
+    if request.headers.get('HX-Request'):
+        return render(request, 'painel/parciais/inicio_painel.html', contexto)
+    return _render(request, 'painel/inicio.html', {
+        **contexto, 'secao': 'inicio', 'mensagem_padrao': MENSAGEM_FECHADO_PADRAO,
+    })
+
+
+@login_required
+@require_POST
+def expediente(request):
+    """Abre/encerra o expediente do bot e edita a mensagem de loja fechada."""
+    config = Configuracao.obter()
+    acao = request.POST.get('acao')
+    agora = timezone.now()
+    if acao == 'fechar' and config.expediente_aberto:
+        config.expediente_aberto, config.expediente_fechado_em = False, agora
+        config.save(update_fields=['expediente_aberto', 'expediente_fechado_em'])
+        auditoria.registrar(
+            request, Tipo.CONFIGURACAO, 'expediente_fechar', 'Encerrou o expediente (bot pausado)',
+            alvo=config, mudancas={'expediente_aberto': [True, False]},
+        )
+        messages.success(request, 'Expediente encerrado. Quem chamar agora recebe a mensagem de loja fechada.')
+    elif acao == 'abrir' and not config.expediente_aberto:
+        config.expediente_aberto, config.expediente_aberto_em = True, agora
+        config.save(update_fields=['expediente_aberto', 'expediente_aberto_em'])
+        auditoria.registrar(
+            request, Tipo.CONFIGURACAO, 'expediente_abrir', 'Abriu o expediente (bot atendendo)',
+            alvo=config, mudancas={'expediente_aberto': [False, True]},
+        )
+        messages.success(request, 'Loja aberta! O bot voltou a atender.')
+    elif acao == 'mensagem':
+        antes = {'horario_atendimento': config.horario_atendimento, 'mensagem_fechado': config.mensagem_fechado}
+        config.horario_atendimento = request.POST.get('horario_atendimento', '').strip()[:120]
+        config.mensagem_fechado = request.POST.get('mensagem_fechado', '').strip()
+        config.save(update_fields=['horario_atendimento', 'mensagem_fechado'])
+        mudancas = {k: [v, getattr(config, k)] for k, v in antes.items() if v != getattr(config, k)}
+        if mudancas:
+            auditoria.registrar(
+                request, Tipo.CONFIGURACAO, 'expediente_mensagem', 'Editou a mensagem de loja fechada',
+                alvo=config, mudancas=mudancas,
+            )
+        messages.success(request, 'Mensagem de loja fechada salva.')
+    return redirect('painel:inicio')
 
 
 # ── Dashboard ──
@@ -162,22 +405,7 @@ def dashboard(request):
         .order_by('-receita')[:6]
     )
 
-    estoque_baixo = [
-        *[
-            {'nome': p.nome, 'estoque': p.estoque, 'pk': p.pk}
-            for p in Produto.objects.filter(
-                ativo=True, estoque__isnull=False, estoque__lte=F('estoque_minimo'),
-            ).exclude(variantes__ativo=True)
-        ],
-        *[
-            {'nome': str(v), 'estoque': v.estoque, 'pk': v.produto_id}
-            for v in Variante.objects.select_related('produto').filter(
-                ativo=True, produto__ativo=True, estoque__isnull=False,
-                estoque__lte=F('produto__estoque_minimo'),
-            )
-        ],
-    ]
-    estoque_baixo.sort(key=lambda e: e['estoque'])
+    estoque_baixo = _estoque_baixo()
 
     novos_clientes = Cliente.objects.filter(criado_em__gte=inicio_serie).count()
 
@@ -194,6 +422,27 @@ def dashboard(request):
         'pedidos_abertos': Pedido.objects.filter(status__in=_ABERTOS).count(),
         'virada': settings.PAINEL_VIRADA_DIA_HORA,
     })
+
+
+def _estoque_baixo() -> list[dict]:
+    """Produtos e opções ativos no estoque mínimo ou abaixo, os mais críticos primeiro."""
+    estoque_baixo = [
+        *[
+            {'nome': p.nome, 'estoque': p.estoque, 'pk': p.pk}
+            for p in Produto.objects.filter(
+                ativo=True, estoque__isnull=False, estoque__lte=F('estoque_minimo'),
+            ).exclude(variantes__ativo=True)
+        ],
+        *[
+            {'nome': str(v), 'estoque': v.estoque, 'pk': v.produto_id}
+            for v in Variante.objects.select_related('produto').filter(
+                ativo=True, produto__ativo=True, estoque__isnull=False,
+                estoque__lte=F('produto__estoque_minimo'),
+            )
+        ],
+    ]
+    estoque_baixo.sort(key=lambda e: e['estoque'])
+    return estoque_baixo
 
 
 # ── Conversas ──
@@ -279,21 +528,83 @@ def conversa(request, telefone: str):
 
     mensagens = list(Mensagem.objects.filter(telefone=telefone).order_by('-pk')[:300])[::-1]
     Cliente.objects.filter(pk=cliente.pk).update(conversa_lida_em=timezone.now())
+    pedidos_abertos = list(cliente.pedidos.filter(status__in=(*_ABERTOS, Pedido.Status.PAGO, Pedido.Status.EM_ENTREGA)))
+    for p in pedidos_abertos:
+        p.proximo = _PROXIMO_STATUS.get(p.status)
+        p.proximo_rotulo = Pedido.Status(p.proximo).label if p.proximo else ''
+    respostas = list(RespostaRapida.objects.filter(ativo=True))
     return _render(request, 'painel/conversa.html', {
         'secao': 'conversas',
         'cliente': cliente,
         'sessao': sessao,
         'mensagens': mensagens,
         'ultimo_id': mensagens[-1].pk if mensagens else 0,
-        'pedidos_abertos': cliente.pedidos.filter(status__in=(*_ABERTOS, Pedido.Status.PAGO, Pedido.Status.EM_ENTREGA)),
+        'pedidos_abertos': pedidos_abertos,
         'em_atendimento_humano': bool(sessao and sessao.estado_atual == SessaoChat.Estado.ATENDIMENTO_HUMANO),
-        'chave_pix': settings.CHAVE_PIX,
+        'respostas_botoes': [r for r in respostas if r.mostrar_botao],
+        'comandos_chat': _comandos_chat(cliente, pedidos_abertos, respostas),
+        'form_resposta': RespostaRapidaForm(),
     })
+
+
+def _resumo_pedido(pedido: Pedido) -> str:
+    linhas = [f'*Pedido #{pedido.pk}*']
+    linhas += [f'{i.quantidade}x {i.nome}' for i in pedido.itens.all()]
+    if pedido.frete:
+        linhas.append(f'Frete: {formatar_preco(float(pedido.frete))}')
+    linhas.append(f'*Total: {formatar_preco(float(pedido.total))}*')
+    return '\n'.join(linhas)
+
+
+def _comandos_chat(cliente: Cliente, pedidos_abertos: list, respostas: list) -> dict:
+    """Dados dos comandos "/" da caixa de resposta: respostas rápidas (com as
+    variáveis já resolvidas para este cliente), comandos fixos e modelos do
+    cardápio com os sabores em estoque."""
+    pedido = pedidos_abertos[0] if pedidos_abertos else None
+    nome_completo = cliente.nome or cliente.nome_whatsapp
+    nome = nome_completo.split()[0] if nome_completo.strip() else ''
+    variaveis = {
+        'nome': nome,
+        'pix': settings.CHAVE_PIX,
+        'endereco': (pedido.endereco if pedido else '') or cliente.ultimo_endereco,
+        'pedido': f'#{pedido.pk}' if pedido else '',
+        'total': formatar_preco(float(pedido.total)) if pedido else '',
+        'horario': Configuracao.obter().horario_atendimento,
+    }
+    fixos = [
+        {'atalho': 'nome', 'titulo': 'Nome do cliente', 'texto': nome},
+        {'atalho': 'endereco', 'titulo': 'Endereço de entrega', 'texto': variaveis['endereco']},
+        {'atalho': 'pedido', 'titulo': f'Resumo do pedido {variaveis["pedido"]}'.strip(),
+         'texto': _resumo_pedido(pedido) if pedido else ''},
+    ]
+    produtos = [
+        {
+            # "Elf Bar 45k (45.000 puffs)" -> /elfbar45k
+            'atalho': slugify(re.sub(r'\([^)]*\)', '', item['nome'])).replace('-', ''),
+            'titulo': item['nome'],
+            'detalhe': formatar_preco(item['preco']) + (
+                f' · {n} sabor{"es" if n > 1 else ""}' if (n := len(item['variantes'])) else ''
+            ),
+            'texto': gerar_sabores_texto(item),
+        }
+        for categoria in catalogo.atualizado()['categorias'] for item in categoria['itens']
+    ]
+    return {
+        'variaveis': variaveis,
+        'respostas': [{'atalho': r.atalho, 'titulo': r.titulo, 'texto': r.texto} for r in respostas],
+        'fixos': [c for c in fixos if c['texto']],
+        'produtos': produtos,
+    }
 
 
 def _sessao(telefone: str) -> SessaoChat:
     sessao, _ = SessaoChat.objects.get_or_create(telefone=telefone)
     return sessao
+
+
+def _nome_conversa(telefone: str) -> str:
+    cliente = Cliente.objects.filter(telefone=telefone).first()
+    return cliente.nome_exibicao if cliente else telefone
 
 
 @login_required
@@ -303,11 +614,20 @@ def conversa_responder(request, telefone: str):
     if texto:
         sessao = _sessao(telefone)
         # Atendente respondeu: o bot para de responder até devolverem a conversa
-        if sessao.estado_atual != SessaoChat.Estado.ATENDIMENTO_HUMANO:
+        assumiu = sessao.estado_atual != SessaoChat.Estado.ATENDIMENTO_HUMANO
+        if assumiu:
             sessao.estado_atual = SessaoChat.Estado.ATENDIMENTO_HUMANO
             sessao.ultima_interacao = timezone.now()
             sessao.save(update_fields=['estado_atual', 'ultima_interacao'])
         ok = async_to_sync(enviar_whatsapp)(telefone, texto, 'atendente')
+        previa = ' '.join(texto.split())
+        previa = previa if len(previa) <= 80 else previa[:79] + '…'
+        auditoria.registrar(
+            request, Tipo.CONVERSA, 'conversa_responder',
+            f'{"Respondeu" if ok else "Falhou ao responder"} {_nome_conversa(telefone)}: "{previa}"'
+            + (' (assumiu a conversa)' if assumiu else ''),
+            alvo=('conversa', telefone),
+        )
         if not ok:
             if request.headers.get('HX-Request'):
                 return HttpResponse(status=502)
@@ -324,6 +644,10 @@ def conversa_assumir(request, telefone: str):
     sessao.estado_atual = SessaoChat.Estado.ATENDIMENTO_HUMANO
     sessao.ultima_interacao = timezone.now()
     sessao.save(update_fields=['estado_atual', 'ultima_interacao'])
+    auditoria.registrar(
+        request, Tipo.CONVERSA, 'conversa_assumir',
+        f'Assumiu a conversa com {_nome_conversa(telefone)}', alvo=('conversa', telefone),
+    )
     messages.success(request, 'Você assumiu a conversa. O bot não responde até você devolver.')
     return redirect('painel:conversa', telefone=telefone)
 
@@ -338,6 +662,12 @@ def conversa_devolver(request, telefone: str):
         async_to_sync(enviar_whatsapp)(
             telefone, '🤖 Voltamos ao atendimento automático! Como posso te ajudar?',
         )
+    auditoria.registrar(
+        request, Tipo.CONVERSA, 'conversa_devolver',
+        f'Devolveu ao bot a conversa com {_nome_conversa(telefone)}'
+        + (' (cliente avisado)' if request.POST.get('avisar') else ''),
+        alvo=('conversa', telefone),
+    )
     messages.success(request, 'Conversa devolvida ao bot.')
     return redirect('painel:conversa', telefone=telefone)
 
@@ -382,7 +712,17 @@ def cliente(request, pk: int):
     if request.method == 'POST':
         form = ClienteForm(request.POST, instance=obj)
         if form.is_valid():
+            mudancas = auditoria.mudancas_form(form)
             form.save()
+            if mudancas:
+                if 'bloqueado' in form.changed_data:
+                    acao = 'Bloqueou' if obj.bloqueado else 'Desbloqueou'
+                else:
+                    acao = 'Editou'
+                auditoria.registrar(
+                    request, Tipo.CLIENTE, 'cliente_editar', f'{acao} o cliente {obj.nome_exibicao}',
+                    alvo=obj, mudancas=mudancas,
+                )
             messages.success(request, 'Cliente atualizado.')
             return redirect('painel:cliente', pk=obj.pk)
     else:
@@ -466,13 +806,20 @@ def pedido_status(request, pk: int):
     if novo not in Pedido.Status.values or novo == obj.status:
         return redirect(request.POST.get('voltar') or 'painel:pedidos')
 
+    anterior = obj.get_status_display()
     servicos.mudar_status(obj, novo)
     rotulo = Pedido.Status(novo).label
+    aviso = ''
     if request.POST.get('avisar') and novo in _AVISOS_STATUS and obj.cliente:
         ok = async_to_sync(enviar_whatsapp)(obj.cliente.telefone, _AVISOS_STATUS[novo].format(n=obj.pk))
-        messages.success(request, f'Pedido #{obj.pk}: {rotulo}' + (' — cliente avisado.' if ok else ' — falha ao avisar no WhatsApp.'))
+        aviso = ' — cliente avisado' if ok else ' — falha ao avisar no WhatsApp'
+        messages.success(request, f'Pedido #{obj.pk}: {rotulo}{aviso}.')
     else:
         messages.success(request, f'Pedido #{obj.pk}: {rotulo}.')
+    auditoria.registrar(
+        request, Tipo.PEDIDO, 'pedido_status', f'Pedido #{obj.pk}: {rotulo}{aviso}',
+        alvo=obj, mudancas={'Status': [anterior, rotulo]},
+    )
 
     # Pedido encerrado: a conversa volta para o bot
     if novo in (Pedido.Status.ENTREGUE, Pedido.Status.CANCELADO) and obj.cliente:
@@ -601,6 +948,13 @@ def venda_manual(request):
                 nome=dados['nome'], frete=frete.quantize(Decimal('0.01')),
                 observacoes=dados['observacoes'],
             )
+            n_itens = sum(i['quantidade'] for i in itens)
+            auditoria.registrar(
+                request, Tipo.PEDIDO, 'venda_manual',
+                f'Lançou a venda manual #{pedido.pk}: {n_itens} {"item" if n_itens == 1 else "itens"}, '
+                f'total R$ {auditoria.texto(pedido.total)} ({pedido.get_status_display()})',
+                alvo=pedido,
+            )
             messages.success(request, f'Venda manual #{pedido.pk} lançada e estoque atualizado.')
             negativos = [
                 f'{i.nome} ({e})' for i in pedido.itens.select_related('produto', 'variante')
@@ -654,6 +1008,7 @@ def estoque_ajustar(request, tipo: str, pk: int):
     """Edição rápida (HTMX) de preço, estoque e ativo de um produto ou opção."""
     modelo = Produto if tipo == 'produto' else Variante
     obj = get_object_or_404(modelo, pk=pk)
+    antes = {'estoque': obj.estoque, 'preco': getattr(obj, 'preco', None), 'ativo': obj.ativo}
     campos = []
 
     if 'delta' in request.POST and obj.estoque is not None:
@@ -674,10 +1029,39 @@ def estoque_ajustar(request, tipo: str, pk: int):
         campos.append('ativo')
     if campos:
         obj.save(update_fields=list(dict.fromkeys(campos)))
+        rotulos = {'estoque': 'Estoque', 'preco': 'Preço', 'ativo': 'Ativo'}
+        mudancas = {
+            rotulos[c]: [auditoria.texto(antes[c]), auditoria.texto(getattr(obj, c))]
+            for c in dict.fromkeys(campos) if antes[c] != getattr(obj, c)
+        }
+        if mudancas:
+            # Cliques seguidos (+1 +1 +1) viram um registro só
+            auditoria.registrar(
+                request, Tipo.ESTOQUE, 'estoque_ajustar', f'Ajustou {obj}',
+                alvo=obj if tipo == 'produto' else obj.produto, mudancas=mudancas,
+                agrupar_minutos=3,
+            )
 
     produto = obj if tipo == 'produto' else obj.produto
     produto = Produto.objects.prefetch_related('variantes').get(pk=produto.pk)
     return render(request, 'painel/parciais/estoque_produto.html', {'p': produto})
+
+
+def _mudancas_variantes(formset) -> dict:
+    """Opções incluídas, removidas e editadas num formset já validado."""
+    mudancas = {}
+    for f in formset.forms:
+        if not f.has_changed():
+            continue
+        nome = f.cleaned_data.get('nome') or f.initial.get('nome') or '?'
+        if f in formset.deleted_forms:
+            if f.instance.pk:
+                mudancas[f'Opção {f.initial.get("nome", nome)}'] = ['existia', 'removida']
+        elif not f.instance.pk:
+            mudancas[f'Opção {nome}'] = ['—', 'incluída']
+        else:
+            mudancas.update(auditoria.mudancas_form(f, prefixo=f'Opção {f.initial.get("nome", nome)} · '))
+    return mudancas
 
 
 @login_required
@@ -687,14 +1071,27 @@ def produto_editar(request, pk: int | None = None):
         if 'excluir' in request.POST and obj:
             nome = obj.nome
             obj.delete()
+            auditoria.registrar(request, Tipo.ESTOQUE, 'produto_excluir', f'Excluiu o produto "{nome}"')
             messages.success(request, f'Produto "{nome}" excluído.')
             return redirect('painel:estoque')
         form = ProdutoForm(request.POST, instance=obj)
         formset = VarianteFormSet(request.POST, instance=obj or Produto())
         if form.is_valid() and formset.is_valid():
+            mudancas = auditoria.mudancas_form(form) if obj else {}
+            mudancas.update(_mudancas_variantes(formset))
             produto = form.save()
             formset.instance = produto
             formset.save()
+            if not obj:
+                auditoria.registrar(
+                    request, Tipo.ESTOQUE, 'produto_criar', f'Cadastrou o produto "{produto.nome}"',
+                    alvo=produto, mudancas=mudancas,
+                )
+            elif mudancas:
+                auditoria.registrar(
+                    request, Tipo.ESTOQUE, 'produto_editar', f'Editou o produto "{produto.nome}"',
+                    alvo=produto, mudancas=mudancas,
+                )
             messages.success(request, f'Produto "{produto.nome}" salvo.')
             return redirect('painel:estoque')
     else:
@@ -706,6 +1103,50 @@ def produto_editar(request, pk: int | None = None):
     })
 
 
+# O WhatsApp aceita documentos de até 100 MB; acima de ~20 MB o cliente já
+# sofre para baixar no 4G.
+_CARDAPIO_PDF_MAX_MB = 30
+
+
+def _salvar_cardapio_pdf(request, config: Configuracao) -> None:
+    """Troca ou remove o PDF do cardápio enviado nas boas-vindas."""
+    if request.POST.get('cardapio_pdf') == 'remover':
+        config.cardapio_pdf.delete(save=True)
+        auditoria.registrar(
+            request, Tipo.CONFIGURACAO, 'cardapio_pdf', 'Removeu o PDF do cardápio', alvo=config,
+        )
+        messages.success(request, 'PDF do cardápio removido. O bot manda só o cardápio em texto.')
+        return
+
+    arquivo = request.FILES.get('cardapio_pdf')
+    if not arquivo:
+        messages.error(request, 'Escolha um arquivo PDF.')
+        return
+    if not arquivo.name.lower().endswith('.pdf'):
+        messages.error(request, 'O arquivo precisa ser um PDF.')
+        return
+    if arquivo.size > _CARDAPIO_PDF_MAX_MB * 1024 * 1024:
+        messages.error(request, f'O PDF passa de {_CARDAPIO_PDF_MAX_MB} MB. Comprima o arquivo e tente de novo.')
+        return
+
+    if config.cardapio_pdf:
+        config.cardapio_pdf.delete(save=False)
+    config.cardapio_pdf.save('cardapio.pdf', arquivo, save=True)
+    auditoria.registrar(
+        request, Tipo.CONFIGURACAO, 'cardapio_pdf', f'Trocou o PDF do cardápio ({arquivo.name})',
+        alvo=config,
+    )
+    messages.success(request, 'PDF do cardápio atualizado. Ele vai junto das boas-vindas para novos clientes.')
+
+
+@login_required
+def cardapio_pdf(request):
+    config = Configuracao.obter()
+    if not config.cardapio_pdf:
+        raise Http404
+    return FileResponse(config.cardapio_pdf.open('rb'), content_type='application/pdf', filename='cardapio.pdf')
+
+
 @login_required
 def configuracoes(request):
     config = Configuracao.obter()
@@ -714,12 +1155,27 @@ def configuracoes(request):
             ok = async_to_sync(notificar_equipe)(
                 '✅ *Teste do Robopod*\nOs avisos da loja vão chegar neste grupo.',
             )
+            auditoria.registrar(
+                request, Tipo.CONFIGURACAO, 'avisos_teste',
+                'Enviou mensagem de teste ao grupo de avisos' if ok else 'Falhou ao enviar o teste ao grupo de avisos',
+                alvo=config,
+            )
             if ok:
                 messages.success(request, 'Mensagem de teste enviada ao grupo.')
             else:
                 messages.error(request, 'Não foi possível enviar: confira o grupo escolhido e a conexão da Evolution.')
             return redirect('painel:configuracoes')
 
+        if 'cardapio_pdf' in request.POST or 'cardapio_pdf' in request.FILES:
+            _salvar_cardapio_pdf(request, config)
+            return redirect('painel:configuracoes')
+
+        campos_aviso = {
+            'grupo_avisos_nome': 'Grupo de avisos',
+            'avisos_ativos': 'Avisos ativos',
+            'avisar_mensagens_atendimento': 'Repassar mensagens em atendimento',
+        }
+        antes = {c: getattr(config, c) for c in campos_aviso}
         grupo = request.POST.get('grupo', '')
         manual = request.POST.get('grupo_manual', '').strip()
         if manual:
@@ -731,6 +1187,15 @@ def configuracoes(request):
         config.avisos_ativos = bool(request.POST.get('avisos_ativos'))
         config.avisar_mensagens_atendimento = bool(request.POST.get('avisar_mensagens_atendimento'))
         config.save()
+        mudancas = {
+            rotulo: [auditoria.texto(antes[c]), auditoria.texto(getattr(config, c))]
+            for c, rotulo in campos_aviso.items() if antes[c] != getattr(config, c)
+        }
+        if mudancas:
+            auditoria.registrar(
+                request, Tipo.CONFIGURACAO, 'configuracoes', 'Alterou os avisos da equipe',
+                alvo=config, mudancas=mudancas,
+            )
         messages.success(request, 'Configurações salvas.')
         return redirect('painel:configuracoes')
 
@@ -748,6 +1213,50 @@ def configuracoes(request):
 
 
 @login_required
+def respostas_rapidas(request):
+    editar = request.GET.get('editar')
+    obj = RespostaRapida.objects.filter(pk=editar).first() if editar else None
+    # Vindo da tela da conversa ("+ Nova"), volta para ela depois de salvar
+    voltar = request.POST.get('voltar', '')
+    if not url_has_allowed_host_and_scheme(voltar, allowed_hosts={request.get_host()}):
+        voltar = ''
+    if request.method == 'POST':
+        if 'excluir' in request.POST:
+            resp = get_object_or_404(RespostaRapida, pk=request.POST['excluir'])
+            descricao = f'Excluiu a resposta rápida /{resp.atalho} ("{resp.titulo}")'
+            resp.delete()
+            auditoria.registrar(request, Tipo.CONFIGURACAO, 'resposta_rapida_excluir', descricao)
+            messages.success(request, 'Resposta rápida excluída.')
+            return redirect('painel:respostas_rapidas')
+        form = RespostaRapidaForm(request.POST, instance=obj)
+        if form.is_valid():
+            mudancas = auditoria.mudancas_form(form) if obj else {}
+            resp = form.save()
+            if not obj:
+                auditoria.registrar(
+                    request, Tipo.CONFIGURACAO, 'resposta_rapida_criar',
+                    f'Criou a resposta rápida /{resp.atalho} ("{resp.titulo}")', alvo=resp,
+                )
+            elif mudancas:
+                auditoria.registrar(
+                    request, Tipo.CONFIGURACAO, 'resposta_rapida_editar',
+                    f'Editou a resposta rápida /{resp.atalho} ("{resp.titulo}")', alvo=resp, mudancas=mudancas,
+                )
+            messages.success(request, f'Resposta rápida salva. Use /{resp.atalho} no chat.')
+            return redirect(voltar or 'painel:respostas_rapidas')
+        if voltar:
+            erros = ' '.join(' '.join(e) for e in form.errors.values())
+            messages.error(request, f'Não foi possível salvar a resposta rápida. {erros}')
+            return redirect(voltar)
+    else:
+        form = RespostaRapidaForm(instance=obj)
+    return _render(request, 'painel/respostas_rapidas.html', {
+        'secao': 'configuracoes', 'form': form, 'editando': obj,
+        'respostas': RespostaRapida.objects.all(),
+    })
+
+
+@login_required
 def categorias(request):
     editar = request.GET.get('editar')
     obj = Categoria.objects.filter(pk=editar).first() if editar else None
@@ -757,12 +1266,24 @@ def categorias(request):
             if cat.produtos.exists():
                 messages.error(request, 'Essa categoria tem produtos. Mova ou exclua os produtos antes.')
             else:
+                titulo = cat.titulo
                 cat.delete()
+                auditoria.registrar(request, Tipo.ESTOQUE, 'categoria_excluir', f'Excluiu a categoria "{titulo}"')
                 messages.success(request, 'Categoria excluída.')
             return redirect('painel:categorias')
         form = CategoriaForm(request.POST, instance=obj)
         if form.is_valid():
-            form.save()
+            mudancas = auditoria.mudancas_form(form) if obj else {}
+            cat = form.save()
+            if not obj:
+                auditoria.registrar(
+                    request, Tipo.ESTOQUE, 'categoria_criar', f'Criou a categoria "{cat.titulo}"', alvo=cat,
+                )
+            elif mudancas:
+                auditoria.registrar(
+                    request, Tipo.ESTOQUE, 'categoria_editar', f'Editou a categoria "{cat.titulo}"',
+                    alvo=cat, mudancas=mudancas,
+                )
             messages.success(request, 'Categoria salva.')
             return redirect('painel:categorias')
     else:
@@ -770,4 +1291,45 @@ def categorias(request):
     return _render(request, 'painel/categorias.html', {
         'secao': 'estoque', 'form': form, 'editando': obj,
         'categorias': Categoria.objects.annotate(num_produtos=Count('produtos')),
+    })
+
+
+# ── Auditoria (só administradores) ──
+
+
+@login_required
+def auditoria_lista(request):
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    busca = request.GET.get('q', '').strip()
+    tipo = request.GET.get('tipo', '')
+    responsavel = request.GET.get('responsavel', '')
+    de, ate = request.GET.get('de', ''), request.GET.get('ate', '')
+
+    qs = RegistroAuditoria.objects.all()
+    if tipo in RegistroAuditoria.Tipo.values:
+        qs = qs.filter(tipo=tipo)
+    if responsavel:
+        qs = qs.filter(responsavel=responsavel)
+    if busca:
+        qs = qs.filter(Q(descricao__icontains=busca) | Q(alvo_id=busca.lstrip('#')))
+    # O período segue o dia comercial, como os relatórios
+    try:
+        if de:
+            qs = qs.filter(criado_em__gte=_inicio_dia(datetime.strptime(de, '%Y-%m-%d').date()))
+        if ate:
+            qs = qs.filter(criado_em__lt=_inicio_dia(datetime.strptime(ate, '%Y-%m-%d').date() + timedelta(days=1)))
+    except ValueError:
+        messages.error(request, 'Data inválida no filtro de período.')
+
+    return _render(request, 'painel/auditoria.html', {
+        'secao': 'auditoria',
+        'pagina': Paginator(qs, 50).get_page(request.GET.get('pagina')),
+        'busca': busca, 'tipo': tipo, 'responsavel': responsavel, 'de': de, 'ate': ate,
+        'tipos': RegistroAuditoria.Tipo.choices,
+        'responsaveis': (
+            RegistroAuditoria.objects.order_by('responsavel')
+            .values_list('responsavel', flat=True).distinct()
+        ),
+        'bot': RegistroAuditoria.BOT,
     })
