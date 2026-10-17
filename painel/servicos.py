@@ -202,6 +202,26 @@ def mudar_status(pedido: Pedido, status: str) -> None:
         pedido.save(update_fields=['status', 'estoque_baixado', 'atualizado_em'])
 
 
+async def cancelar_pedido_cliente(pedido_id: int | None) -> None:
+    """Cancela (devolvendo o estoque) o pedido que o cliente desistiu ou quis
+    alterar antes de mandar o comprovante."""
+    if not pedido_id:
+        return
+    pedido = await Pedido.objects.filter(
+        pk=pedido_id, status=Pedido.Status.AGUARDANDO_PAGAMENTO,
+    ).afirst()
+    if not pedido:
+        return
+    await sync_to_async(mudar_status)(pedido, Pedido.Status.CANCELADO)
+    await auditoria.aregistrar_bot(
+        auditoria.Tipo.PEDIDO, 'pedido_status',
+        f'Pedido #{pedido_id}: cancelado pelo cliente no bot', alvo=('pedido', pedido_id),
+        mudancas={'Status': [
+            Pedido.Status.AGUARDANDO_PAGAMENTO.label, Pedido.Status.CANCELADO.label,
+        ]},
+    )
+
+
 async def marcar_comprovante(pedido_id: int | None) -> None:
     if pedido_id:
         alterados = await Pedido.objects.filter(

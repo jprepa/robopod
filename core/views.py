@@ -481,24 +481,69 @@ def _normalizar(texto: str) -> str:
     return texto.strip().lower().strip('.!* ')
 
 
+def _comando_pedido(texto: str) -> str | None:
+    """Reconhece pedidos curtos de cancelar/alterar, mesmo em frase
+    ("cancelar pedido", "quero alterar", "alterar endereço").
+
+    Returns:
+        'cancelar', 'alterar_endereco', 'alterar' ou None.
+    """
+    palavras = re.findall(r'\w+', texto.lower())
+    # Com número parece endereço ("Rua da Mudança, 12"), não comando
+    if not palavras or len(palavras) > 6 or re.search(r'\d', texto):
+        return None
+    if any(p.startswith(('cancel', 'desist')) for p in palavras):
+        return 'cancelar'
+    if any(p.startswith(('alter', 'mud', 'troc', 'corrig')) for p in palavras):
+        if any(p.startswith(('endere', 'rua')) for p in palavras):
+            return 'alterar_endereco'
+        return 'alterar'
+    return None
+
+
+async def _cancelar_pelo_cliente(sessao: SessaoChat) -> None:
+    await servicos.cancelar_pedido_cliente(sessao.carrinho_temporario.get('pedido_id'))
+    sessao.resetar_sessao()
+    await sessao.asave()
+    await enviar_whatsapp(sessao.telefone, '❌ Pedido cancelado. Se precisar de algo, é só chamar! 😊')
+
+
+async def _alterar_pelo_cliente(sessao: SessaoChat) -> None:
+    await servicos.cancelar_pedido_cliente(sessao.carrinho_temporario.get('pedido_id'))
+    sessao.estado_atual = SessaoChat.Estado.ATENDIMENTO_LLM
+    sessao.carrinho_temporario = {}
+    sessao.ultima_interacao = timezone.now()
+    await sessao.asave(update_fields=['estado_atual', 'carrinho_temporario', 'ultima_interacao'])
+    await enviar_whatsapp(sessao.telefone, '✏️ Ok! Me diga o que deseja alterar no pedido.')
+
+
+async def _alterar_endereco_pelo_cliente(sessao: SessaoChat) -> None:
+    """Mantém os itens, descarta o pedido cotado e pede o endereço de novo."""
+    await servicos.cancelar_pedido_cliente(sessao.carrinho_temporario.get('pedido_id'))
+    itens = sessao.carrinho_temporario.get('itens', [])
+    sessao.estado_atual = SessaoChat.Estado.AGUARDANDO_ENDERECO
+    sessao.carrinho_temporario = {'itens': itens}
+    sessao.ultima_interacao = timezone.now()
+    await sessao.asave(update_fields=['estado_atual', 'carrinho_temporario', 'ultima_interacao'])
+    await enviar_whatsapp(
+        sessao.telefone,
+        '📍 Sem problema! Me envie o *endereço completo* correto:\n'
+        '_Rua, número, bairro e cidade (e complemento, se tiver)_',
+    )
+
+
 async def _handler_aguardando_endereco(
     sessao: SessaoChat, texto: str,
 ) -> None:
     """Recebe endereço do cliente e dispara cotação de frete em background."""
     comando = _normalizar(texto)
 
-    if comando in ('cancelar', 'cancela'):
-        sessao.resetar_sessao()
-        await sessao.asave()
-        await enviar_whatsapp(sessao.telefone, '❌ Pedido cancelado. Se precisar de algo, é só chamar! 😊')
+    acao = _comando_pedido(texto)
+    if acao == 'cancelar':
+        await _cancelar_pelo_cliente(sessao)
         return
-
-    if comando in ('alterar', 'altera', 'mudar'):
-        sessao.estado_atual = SessaoChat.Estado.ATENDIMENTO_LLM
-        sessao.carrinho_temporario = {}
-        sessao.ultima_interacao = timezone.now()
-        await sessao.asave(update_fields=['estado_atual', 'carrinho_temporario', 'ultima_interacao'])
-        await enviar_whatsapp(sessao.telefone, '✏️ Ok! Me diga o que deseja alterar no pedido.')
+    if acao == 'alterar':
+        await _alterar_pelo_cliente(sessao)
         return
 
     if comando in ('atendente', 'humano'):
@@ -627,7 +672,8 @@ async def _task_calcular_frete(telefone: str, endereco: str) -> None:
             f"💳 *Pagamento via PIX*\n\n"
             f"Chave PIX: `{settings.CHAVE_PIX}`\n\n"
             f"Após o pagamento, envie a *foto ou PDF do comprovante* aqui. ✅\n"
-            f"_Endereço errado ou alguma dúvida? Digite *atendente*._"
+            f"_Endereço errado? Digite *alterar endereço*. Mudar o pedido: *alterar*; "
+            f"desistir: *cancelar*; dúvidas: *atendente*._"
         )
 
         await enviar_whatsapp(telefone, mensagem_cobranca)
@@ -697,12 +743,24 @@ async def _handler_aguardando_comprovante(
         await _transferir_para_humano(sessao, 'Cliente pediu atendente no pagamento')
         return
 
+    acao = _comando_pedido(texto)
+    if acao == 'cancelar':
+        await _cancelar_pelo_cliente(sessao)
+        return
+    if acao == 'alterar':
+        await _alterar_pelo_cliente(sessao)
+        return
+    if acao == 'alterar_endereco':
+        await _alterar_endereco_pelo_cliente(sessao)
+        return
+
     await enviar_whatsapp(
         sessao.telefone,
         '⏳ Ainda estamos aguardando o comprovante de pagamento PIX.\n'
         f'Chave PIX: `{settings.CHAVE_PIX}`\n\n'
-        'Envie a foto ou PDF do comprovante aqui. '
-        'Se precisar de ajuda, digite *atendente*.',
+        'Envie a foto ou PDF do comprovante aqui.\n'
+        'Para mudar o pedido digite *alterar*; para desistir, *cancelar*; '
+        'endereço errado, *alterar endereço*. Outras dúvidas: *atendente*.',
     )
 
 
