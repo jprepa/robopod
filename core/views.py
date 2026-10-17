@@ -168,7 +168,11 @@ def _resumo_itens(itens: list[dict]) -> tuple[str, float]:
 
 
 async def _enviar_cardapio(telefone: str, rodape: bool = True) -> None:
-    """Envia o cardápio: imagem opcional + lista interativa ou texto formatado."""
+    """Envia o cardápio: o PDF, se houver um carregado; senão imagem opcional
+    + lista interativa ou texto formatado."""
+    if await _enviar_pdf_cardapio(telefone, rodape=rodape):
+        return
+
     if settings.CARDAPIO_IMAGEM_URL:
         await enviar_imagem_whatsapp(telefone, settings.CARDAPIO_IMAGEM_URL)
 
@@ -189,11 +193,14 @@ async def _enviar_cardapio(telefone: str, rodape: bool = True) -> None:
     await enviar_whatsapp(telefone, gerar_menu_texto(rodape=rodape, horario=config.horario_atendimento))
 
 
-async def _enviar_pdf_cardapio(telefone: str) -> None:
-    """Envia o PDF do cardápio, se houver um carregado em Painel > Configurações."""
+async def _enviar_pdf_cardapio(telefone: str, rodape: bool = True) -> bool:
+    """Envia o PDF do cardápio, se houver um carregado em Painel > Configurações.
+
+    Devolve False se não há PDF ou o envio falhou (aí vai a lista escrita).
+    """
     config = await Configuracao.aobter()
     if not config.cardapio_pdf:
-        return
+        return False
 
     def _ler() -> bytes:
         with config.cardapio_pdf.open('rb') as arquivo:
@@ -203,9 +210,16 @@ async def _enviar_pdf_cardapio(telefone: str) -> None:
         conteudo = await sync_to_async(_ler)()
     except OSError:
         logger.exception('PDF do cardápio não encontrado: %s', config.cardapio_pdf.name)
-        return
-    await enviar_documento_whatsapp(
-        telefone, conteudo, 'Cardápio Robopod.pdf', '📄 Nosso cardápio completo',
+        return False
+    legenda = '📄 Nosso cardápio completo'
+    if rodape:
+        # Sem a lista escrita, as instruções do rodapé vão na legenda do PDF
+        legenda += (
+            '\n\nMe fala qual modelo você quer que eu te mando os sabores disponíveis =)\n'
+            '🙋 Quer falar com uma pessoa? Digite *atendente*.'
+        )
+    return await enviar_documento_whatsapp(
+        telefone, conteudo, 'Cardápio Robopod.pdf', legenda,
     )
 
 
@@ -218,9 +232,9 @@ _BOAS_VINDAS = (
 
 
 async def _enviar_boas_vindas(telefone: str) -> None:
-    """Primeiro contato: boas-vindas (com a opção de atendente), PDF e modelos."""
+    """Primeiro contato: boas-vindas (com a opção de atendente) e cardápio
+    (o PDF, ou os modelos por escrito se não houver PDF)."""
     await enviar_whatsapp(telefone, _BOAS_VINDAS)
-    await _enviar_pdf_cardapio(telefone)
     # Sem o rodapé de instruções: as boas-vindas logo acima já explicam
     await _enviar_cardapio(telefone, rodape=False)
 

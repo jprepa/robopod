@@ -260,7 +260,7 @@ REGRAS INVIOLÁVEIS:
 11. Se o cliente pedir o cardápio, o menu, os preços ou perguntar o que tem disponível, use a ferramenta `mostrar_cardapio` em vez de escrever o cardápio você mesmo. O cardápio enviado ao cliente mostra só os modelos e preços, SEM os sabores.
 12. Se o cliente disser que quer pedir/comprar (ex.: "quero um pod", "gostaria de fazer um pedido") sem dizer o modelo, use `mostrar_cardapio` — NUNCA pergunte "qual modelo?" sem mostrar os modelos. Também use `mostrar_cardapio` se o cliente parecer perdido ou não souber o que escolher.
 13. Os itens do cardápio são numerados. Se o cliente pedir pelo número (ex.: "quero o 3"), use o item correspondente.
-14. Quando o cliente escolher um modelo que tem sabores sem dizer qual sabor (ex.: "quero o V35", "o 2"), ou perguntar quais sabores um modelo tem, use a ferramenta `mostrar_sabores` em vez de listar os sabores você mesmo.
+14. Quando o cliente escolher um modelo que tem sabores sem dizer qual sabor (ex.: "quero o V35", "o 2"), ou perguntar quais sabores um modelo tem, use a ferramenta `mostrar_sabores` em vez de listar os sabores você mesmo. Isso vale MESMO que a mensagem também pergunte quais modelos existem (ex.: "quero um V35, quais modelos tem?"): se o cliente citou um modelo, use `mostrar_sabores` com ele e NÃO `mostrar_cardapio`.
 15. Se o cliente já disser o modelo e o sabor (ex.: "1 Ignite V35 Cherry Ice"), NÃO use `mostrar_sabores`: siga com o pedido. No `fechar_pedido`, inclua o sabor no nome (ex.: "Ignite V35 (3.500 puffs) - Cherry Ice 🍒🧊").
 
 CARDÁPIO (com os sabores, só para sua referência):
@@ -478,7 +478,13 @@ async def processar_mensagem(
 
     # ── Verifica se houve Function Calling ──
     if message.tool_calls:
-        tool_call = message.tool_calls[0]
+        # Se a IA chamou mais de uma ferramenta (ex.: cardápio + sabores para
+        # "quero um V35, quais modelos tem?"), os sabores do modelo citado
+        # têm prioridade: o cliente já escolheu, não precisa da lista toda.
+        tool_call = next(
+            (tc for tc in message.tool_calls if tc.function.name == 'mostrar_sabores'),
+            message.tool_calls[0],
+        )
         nome_funcao = tool_call.function.name
         try:
             argumentos = json.loads(tool_call.function.arguments or '{}')
