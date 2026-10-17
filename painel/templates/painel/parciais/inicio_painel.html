@@ -3,7 +3,7 @@
   <div class="grade" style="align-content:start">
 
     <section class="cartao">
-      <h2>Precisa de você {% if alertas %}<span class="badge" data-n="{{ alertas }}">{{ alertas }}</span>{% endif %}</h2>
+      <h2>Pendente {% if alertas %}<span class="badge" data-n="{{ alertas }}">{{ alertas }}</span>{% endif %}</h2>
       <ul class="pendencias">
         {% for a in atendente %}{% if a.sem_resposta %}
         <li class="urgente">
@@ -140,20 +140,19 @@
 
   <div class="grade" style="align-content:start">
     <section class="cartao">
-      <h2>Hoje <span class="muted peq">(dia vira às {{ virada }}h)</span></h2>
+      <h2>Hoje</h2>
       <div class="hoje">
-        <div><div class="rotulo">Faturamento</div><div class="valor">{{ hoje.total|brl }}</div></div>
-        <div><div class="rotulo">Pedidos pagos</div><div class="valor">{{ hoje.pedidos }}</div></div>
+        <div><div class="rotulo">Faturamento</div>
+          <div class="comparativo peq" title="Comparado com o mesmo dia da semana passada, até este horário ({{ semana_passada.total|brl }})">{% if variacao is not None %}<span class="{% if variacao >= 0 %}sobe{% else %}desce{% endif %}">{% if variacao >= 0 %}▲ +{% else %}▼ {% endif %}{{ variacao|floatformat:0 }}%</span> <span class="muted">vs. semana passada</span>{% else %}<span class="muted">— vs. semana passada</span>{% endif %}</div>
+          <div class="valor">{{ hoje.total|brl }}</div></div>
+        <div><div class="rotulo">Pedidos pagos</div><div class="comparativo peq">&nbsp;</div><div class="valor">{{ hoje.pedidos }}</div></div>
         <div><div class="rotulo">Ticket médio</div><div class="valor peq-valor">{{ hoje.ticket|brl }}</div></div>
-        <div><div class="rotulo">vs. semana passada</div><div class="valor peq-valor">
-          {% if variacao is not None %}<span class="{% if variacao >= 0 %}sobe{% else %}desce{% endif %}">{% if variacao >= 0 %}▲ +{% else %}▼ {% endif %}{{ variacao|floatformat:0 }}%</span>{% else %}<span class="muted">—</span>{% endif %}
-        </div></div>
+        <div><div class="rotulo">Novos clientes</div><div class="valor peq-valor">{{ novos_clientes_hoje }}</div></div>
       </div>
-      <div class="muted peq" style="margin-top:6px">Comparando com {{ semana_passada.total|brl }} no mesmo dia da semana passada, até este horário.</div>
     </section>
 
     <section class="cartao">
-      <h2>Movimento de hoje <span class="muted peq">mensagens de clientes por hora</span></h2>
+      <h2>Atividade por hora <span class="muted peq">mensagens de clientes</span></h2>
       <div class="horas" role="img" aria-label="Mensagens de clientes por hora hoje">
         {% for h in movimento %}
         <div class="hora{% if h.atual %} atual{% endif %}" title="{{ h.hora }}h: {{ h.mensagens }} mensage{{ h.mensagens|pluralize:'m,ns' }}{% if h.pedidos %}, {{ h.pedidos }} pedido{{ h.pedidos|pluralize }}{% endif %}">

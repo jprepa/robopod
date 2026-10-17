@@ -352,14 +352,17 @@ async def listar_grupos_whatsapp(timeout: float = 10) -> list[dict]:
 
 
 async def baixar_midia(data: dict) -> tuple[bytes, str] | None:
-    """Conteúdo e mimetype de uma mídia recebida (ex.: áudio), ou None.
+    """Conteúdo e mimetype de uma mídia recebida (áudio ou imagem), ou None.
 
     Usa o base64 que já vem no webhook (opção "webhook_base64" da Evolution);
     sem ele, pede o arquivo à Evolution pelo id da mensagem.
     """
     mensagem = data.get('message') or {}
-    midia = mensagem.get('audioMessage') or {}
-    mimetype = (midia.get('mimetype') or 'audio/ogg').split(';')[0].strip()
+    if 'imageMessage' in mensagem:
+        midia, padrao = mensagem.get('imageMessage') or {}, 'image/jpeg'
+    else:
+        midia, padrao = mensagem.get('audioMessage') or {}, 'audio/ogg'
+    mimetype = (midia.get('mimetype') or padrao).split(';')[0].strip()
     if mensagem.get('base64'):
         try:
             return base64.b64decode(mensagem['base64']), mimetype

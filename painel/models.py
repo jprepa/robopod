@@ -158,7 +158,7 @@ class Pedido(models.Model):
     observacoes = models.TextField(blank=True)
     vendedor = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
-        help_text='Quem lançou a venda manual. Vazio = pedido feito pelo bot no WhatsApp',
+        help_text='Quem lançou a venda manual ou aprovou o pagamento do pedido do WhatsApp',
     )
     estoque_baixado = models.BooleanField(default=False)
     criado_em = models.DateTimeField(default=timezone.now, db_index=True)

@@ -5,18 +5,28 @@
 <div class="topo"><h1>Clientes <span class="muted" style="font-size:15px;font-weight:500">{{ total_clientes }}</span></h1></div>
 <form class="filtros" method="get">
   <input type="search" name="q" value="{{ busca }}" placeholder="Buscar por nome ou número">
-  <select name="ordem" onchange="this.form.submit()" style="width:auto">
-    <option value="recentes" {% if ordem == 'recentes' %}selected{% endif %}>Mais recentes</option>
-    <option value="gasto" {% if ordem == 'gasto' %}selected{% endif %}>Quem mais gastou</option>
-    <option value="pedidos" {% if ordem == 'pedidos' %}selected{% endif %}>Mais pedidos</option>
-    <option value="nome" {% if ordem == 'nome' %}selected{% endif %}>Nome</option>
-  </select>
+  <input type="hidden" name="ordem" value="{{ ordem }}">
+  <input type="hidden" name="dir" value="{{ direcao }}">
   <label class="chip" style="cursor:pointer"><input type="checkbox" name="bloqueados" value="1" {% if request.GET.bloqueados %}checked{% endif %} onchange="this.form.submit()"> Só bloqueados</label>
   <button class="btn" type="submit">Buscar</button>
 </form>
+<style>
+th.ordenavel a { color: inherit; text-decoration: none; white-space: nowrap; }
+th.ordenavel a:hover { color: var(--text); }
+th.ordenavel .seta { margin-left: 4px; font-size: 10px; opacity: .35; }
+th.ordenavel.ativa .seta { opacity: 1; }
+</style>
 <div class="cartao tabela-wrap" style="padding:0">
   <table>
-    <thead><tr><th>Cliente</th><th>Número</th><th class="num">Pedidos</th><th class="num">Total gasto</th><th>Último pedido</th><th>Última mensagem</th><th></th></tr></thead>
+    <thead><tr>
+      {% for col in cabecalho %}
+      <th class="ordenavel{% if col.num %} num{% endif %}{% if col.ativa %} ativa{% endif %}"{% if col.ativa %} aria-sort="{% if direcao == 'asc' %}ascending{% else %}descending{% endif %}"{% endif %}>
+        <a href="{% url_com ordem=col.chave dir=col.dir pagina='' %}" title="Ordenar por {{ col.rotulo|lower }}">{{ col.rotulo }}<span class="seta" aria-hidden="true">{% if col.ativa %}{% if direcao == 'asc' %}▲{% else %}▼{% endif %}{% else %}↕{% endif %}</span></a>
+      </th>
+      {% if forloop.first %}<th>Número</th>{% endif %}
+      {% endfor %}
+      <th></th>
+    </tr></thead>
     <tbody>
     {% for c in pagina %}
       <tr>

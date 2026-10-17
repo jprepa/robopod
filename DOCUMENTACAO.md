@@ -145,7 +145,7 @@ atenção agora: clientes esperando atendente, comprovantes para conferir, pedid
 esperando sair, pedidos sem pagamento há mais de 30 min, itens esgotados, o movimento
 do dia por hora e os pedidos em andamento. Atualiza sozinha a cada 20 segundos.
 
-O botão **Encerrar expediente** pausa o bot: quem mandar mensagem recebe só a
+O botão **Encerrar atividades** pausa o bot: quem mandar mensagem recebe só a
 *mensagem de loja fechada* com o horário de atendimento (editáveis ali mesmo, com
 prévia). Cada cliente recebe esse aviso no máximo uma vez a cada 3 horas. Pedidos já em
 andamento (endereço, frete, comprovante) e conversas com atendente seguem normalmente.
@@ -165,6 +165,14 @@ escrito; no painel aparecem como "🎤 Áudio: …". O modelo é `OPENAI_TRANSCR
 (padrão `gpt-4o-mini-transcribe`; `whisper-1` também funciona). O áudio é baixado da
 Evolution pelo id da mensagem, então não precisa ligar o `webhook_base64`. Se a
 transcrição falhar, o bot pede para o cliente escrever.
+
+### 3.4.4. Fotos dos clientes
+
+No atendimento, uma foto (ex.: print de um pod) é descrita pelo `OPENAI_MODEL`
+(precisa aceitar imagem, como o `gpt-4o-mini`) usando os nomes do cardápio, e a
+descrição segue para a IA como se o cliente tivesse escrito, junto com a legenda.
+Se não der para ler a foto, ou se for um documento, o bot pede para o cliente
+escrever. Na etapa de pagamento, foto/documento continua valendo como comprovante.
 
 ### 3.5. Chave PIX
 

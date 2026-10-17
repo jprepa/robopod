@@ -23,6 +23,7 @@ from .llm_service import (
     processar_mensagem, gerar_menu_texto, gerar_sabores_texto, localizar_item,
     gerar_secoes_lista, gerar_secoes_categoria, gerar_secoes_variantes,
     buscar_item, buscar_categoria, item_tem_variantes, formatar_preco, transcrever_audio,
+    descrever_imagem,
 )
 from .notificacoes import (
     enviar_whatsapp, notificar_equipe, baixar_midia,
@@ -184,7 +185,8 @@ async def _enviar_cardapio(telefone: str, rodape: bool = True) -> None:
             return
         logger.warning('Lista interativa falhou, enviando cardápio em texto')
 
-    await enviar_whatsapp(telefone, gerar_menu_texto(rodape=rodape))
+    config = await Configuracao.aobter()
+    await enviar_whatsapp(telefone, gerar_menu_texto(rodape=rodape, horario=config.horario_atendimento))
 
 
 async def _enviar_pdf_cardapio(telefone: str) -> None:
@@ -788,6 +790,14 @@ async def _transcrever_audio(data: dict) -> str:
     return await transcrever_audio(*midia)
 
 
+async def _descrever_imagem(data: dict) -> str:
+    """Baixa a foto do cliente e devolve o que há nela ('' se não conseguir)."""
+    midia = await baixar_midia(data)
+    if midia is None:
+        return ''
+    return await descrever_imagem(*midia)
+
+
 # ── Mapa de handlers por estado ──
 _HANDLERS = {
     SessaoChat.Estado.ATENDIMENTO_LLM: _handler_atendimento_llm,
@@ -862,7 +872,15 @@ async def evolution_webhook(request) -> JsonResponse:
         await _handler_botao(sessao, texto)
         return JsonResponse({'status': 'ok'})
 
-    # Imagem/documento fora da etapa de pagamento: a IA não lê mídia
+    # Foto no atendimento: a IA descreve e segue como se o cliente tivesse escrito
+    if tipo_interacao == 'midia' and em_atendimento_llm and texto.startswith('[imagem]'):
+        descricao = await _descrever_imagem(body.get('data', body))
+        if descricao:
+            legenda = texto.removeprefix('[imagem]').strip()
+            texto = f'[Cliente enviou uma foto: {descricao}] {legenda}'.strip()
+            tipo_interacao = 'texto'
+
+    # Documento (ou foto que não deu para ler) fora da etapa de pagamento
     if tipo_interacao == 'midia' and em_atendimento_llm:
         await enviar_whatsapp(
             telefone,

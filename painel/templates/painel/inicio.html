@@ -62,6 +62,7 @@ h2 .badge { vertical-align: 2px; margin-left: 4px; }
 .hoje .rotulo { color: var(--text-2); font-size: 12px; }
 .hoje .valor { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .hoje .peq-valor { font-size: 17px; }
+.hoje .comparativo { font-size: 12px; min-height: 16px; margin-top: 2px; }
 .horas { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 2px; height: 120px; align-items: end; }
 .hora { display: grid; grid-template-rows: 14px 1fr 14px; height: 100%; align-items: end; justify-items: center; min-width: 0; }
 .hora .barra { width: 100%; background: var(--accent); opacity: .45; border-radius: 3px 3px 0 0; align-self: end; }
@@ -128,7 +129,7 @@ td.cli .itens { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
             {% if config.expediente_aberto %}onsubmit="return confirm('Encerrar o expediente? Quem chamar vai receber a mensagem de loja fechada.')"{% endif %}>
         {% csrf_token %}
         {% if config.expediente_aberto %}
-          <button class="btn grande{% if not config.bot_pausado %} fechar{% endif %}" type="submit" name="acao" value="fechar">🌙 Encerrar expediente</button>
+          <button class="btn grande{% if not config.bot_pausado %} fechar{% endif %}" type="submit" name="acao" value="fechar">🌙 Encerrar atividades</button>
         {% else %}
           <button class="btn grande{% if not config.bot_pausado %} abrir{% endif %}" type="submit" name="acao" value="abrir">☀️ Abrir a loja</button>
         {% endif %}

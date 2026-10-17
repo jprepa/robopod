@@ -281,6 +281,7 @@ def _contexto_inicio() -> dict:
         'hoje': resumo_hoje,
         'semana_passada': semana_passada,
         'variacao': variacao,
+        'novos_clientes_hoje': Cliente.objects.filter(criado_em__gte=inicio_hoje).count(),
         'movimento': _movimento_por_hora(inicio_hoje),
         'virada': settings.PAINEL_VIRADA_DIA_HORA,
         'atendente': atendente,
@@ -326,7 +327,7 @@ def expediente(request):
             request, Tipo.CONFIGURACAO, 'expediente_fechar', 'Encerrou o expediente (bot pausado)',
             alvo=config, mudancas={'expediente_aberto': [True, False]},
         )
-        messages.success(request, 'Expediente encerrado. Quem chamar agora recebe a mensagem de loja fechada.')
+        messages.success(request, 'Atividades encerradas. Quem chamar agora recebe a mensagem de loja fechada.')
     elif acao == 'abrir' and not config.expediente_aberto:
         config.expediente_aberto, config.expediente_aberto_em = True, agora
         config.save(update_fields=['expediente_aberto', 'expediente_aberto_em'])
@@ -462,24 +463,30 @@ def _vendas_por_hora(vendas) -> list[dict]:
 
 
 def _vendas_por_vendedor(vendas, total_periodo: Decimal) -> list[dict]:
-    """Quem vendeu: o bot (pedidos do WhatsApp) e cada usuário que lançou venda manual."""
+    """Quem vendeu: o usuário que lançou a venda manual ou aprovou o pagamento do pedido
+    do WhatsApp. Sobra para o bot só pedido faturado sem ninguém registrado."""
     linhas = (
         vendas.order_by().values('origem', 'vendedor_id', 'vendedor__username', 'vendedor__first_name', 'vendedor__last_name')
         .annotate(pedidos=Count('id'), total=Sum('total'))
     )
-    resultado = []
+    # Um usuário pode ter vendas manuais e do WhatsApp: soma tudo numa linha só
+    por_vendedor = {}
     for v in linhas:
-        if v['origem'] != Pedido.Origem.MANUAL:
-            nome = '🤖 Bot (WhatsApp)'
-        elif v['vendedor_id']:
+        if v['vendedor_id']:
+            chave = v['vendedor_id']
             nome = f"{v['vendedor__first_name']} {v['vendedor__last_name']}".strip() or v['vendedor__username']
+        elif v['origem'] != Pedido.Origem.MANUAL:
+            chave, nome = 'bot', '🤖 Bot (sem aprovação registrada)'
         else:
-            nome = 'Venda manual (sem vendedor)'
-        resultado.append({
-            'nome': nome, 'pedidos': v['pedidos'], 'total': v['total'],
-            'ticket': v['total'] / v['pedidos'],
-            'parcela': float(v['total'] / total_periodo * 100) if total_periodo else 0,
-        })
+            chave, nome = 'manual', 'Venda manual (sem vendedor)'
+        linha = por_vendedor.setdefault(chave, {'nome': nome, 'pedidos': 0, 'total': Decimal('0')})
+        linha['pedidos'] += v['pedidos']
+        linha['total'] += v['total']
+    resultado = [
+        {**r, 'ticket': r['total'] / r['pedidos'],
+         'parcela': float(r['total'] / total_periodo * 100) if total_periodo else 0}
+        for r in por_vendedor.values()
+    ]
     return sorted(resultado, key=lambda r: r['total'], reverse=True)
 
 
@@ -784,16 +791,29 @@ def clientes(request):
         qs = qs.filter(cond)
     if request.GET.get('bloqueados'):
         qs = qs.filter(bloqueado=True)
-    ordenacoes = {
-        'recentes': [F('ultima_mensagem_em').desc(nulls_last=True)],
-        'gasto': ['-total_gasto'],
-        'pedidos': ['-num_pedidos'],
-        'nome': ['nome', 'nome_whatsapp'],
+    # Ordenação clicando no cabeçalho: coluna -> (campo, direção padrão)
+    colunas = {
+        'nome': ('nome', 'asc'), 'pedidos': ('num_pedidos', 'desc'), 'gasto': ('total_gasto', 'desc'),
+        'ultimo_pedido': ('ultimo_pedido', 'desc'), 'recentes': ('ultima_mensagem_em', 'desc'),
     }
-    qs = qs.order_by(*ordenacoes.get(ordem, ordenacoes['recentes']))
+    if ordem not in colunas:
+        ordem = 'recentes'
+    campo, padrao = colunas[ordem]
+    direcao = request.GET.get('dir') if request.GET.get('dir') in ('asc', 'desc') else padrao
+    # Vazios (sem pedido/mensagem) sempre no fim, nos dois sentidos
+    expr = F(campo).asc(nulls_last=True) if direcao == 'asc' else F(campo).desc(nulls_last=True)
+    qs = qs.order_by(expr, *(['nome_whatsapp'] if ordem == 'nome' else []), 'pk')
     pagina = Paginator(qs, 50).get_page(request.GET.get('pagina'))
     return _render(request, 'painel/clientes.html', {
-        'secao': 'clientes', 'pagina': pagina, 'busca': busca, 'ordem': ordem,
+        'secao': 'clientes', 'pagina': pagina, 'busca': busca, 'ordem': ordem, 'direcao': direcao,
+        'cabecalho': [
+            {'chave': chave, 'rotulo': rotulo, 'num': num, 'ativa': chave == ordem,
+             'dir': ('asc' if direcao == 'desc' else 'desc') if chave == ordem else colunas[chave][1]}
+            for chave, rotulo, num in (
+                ('nome', 'Cliente', False), ('pedidos', 'Pedidos', True), ('gasto', 'Total gasto', True),
+                ('ultimo_pedido', 'Último pedido', False), ('recentes', 'Última mensagem', False),
+            )
+        ],
         'total_clientes': Cliente.objects.count(),
     })
 
@@ -901,6 +921,9 @@ def pedido_status(request, pk: int):
 
     anterior = obj.get_status_display()
     servicos.mudar_status(obj, novo)
+    # Quem aprova o pagamento de um pedido do bot fica como vendedor dele
+    if novo in _FATURADOS and obj.status not in _FATURADOS:
+        Pedido.objects.filter(pk=obj.pk, vendedor__isnull=True).update(vendedor=request.user)
     rotulo = Pedido.Status(novo).label
     aviso = ''
     if request.POST.get('avisar') and novo in _AVISOS_STATUS and obj.cliente:

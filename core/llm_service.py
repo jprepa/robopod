@@ -4,6 +4,7 @@ Implementa o fluxo conversacional com guardrails estritos e
 Function Calling para fechar pedidos ou escalar para humano.
 """
 
+import base64
 import json
 import logging
 import re
@@ -13,6 +14,7 @@ from django.conf import settings
 from openai import AsyncOpenAI
 
 from painel import catalogo
+from painel.models import Configuracao
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +45,7 @@ def formatar_preco(valor: float) -> str:
     return f"R$ {valor:,.2f}".replace(',', '_').replace('.', ',').replace('_', '.')
 
 
-def gerar_menu_texto(com_sabores: bool = False, rodape: bool = True) -> str:
+def gerar_menu_texto(com_sabores: bool = False, rodape: bool = True, horario: str = '') -> str:
     """Gera o cardápio formatado para WhatsApp (negrito/itálico) e para o prompt.
 
     Os itens são numerados em sequência para que o cliente possa pedir
@@ -54,12 +56,9 @@ def gerar_menu_texto(com_sabores: bool = False, rodape: bool = True) -> str:
     ilegível); os sabores são enviados depois, por modelo (`gerar_sabores_texto`).
     O system prompt usa `com_sabores=True` para a IA conhecer as opções.
     `rodape=False` tira as instruções do fim (as boas-vindas já dizem isso).
+    `horario` não aparece mais no cabeçalho (mantido só por compatibilidade).
     """
-    linhas: list[str] = [
-        '📋 *CARDÁPIO ROBOPOD*',
-        '_Delivery noturno • 18h às 03h_',
-        '',
-    ]
+    linhas: list[str] = ['📋 *MODELOS DISPONÍVEIS*', '']
 
     numero = 1
     tem_sabores = False
@@ -257,7 +256,7 @@ REGRAS INVIOLÁVEIS:
 7. Se o cliente pedir para falar com um humano, ou se você não souber responder, use IMEDIATAMENTE a ferramenta `solicitar_humano`. Se o cliente parecer com dúvida ou insatisfeito, lembre que ele pode digitar *atendente* para falar com uma pessoa.
 8. Quando o cliente confirmar que quer finalizar o pedido, use a ferramenta `fechar_pedido` com os itens e quantidades corretos.
 9. Sempre confirme o pedido com o cliente ANTES de chamar `fechar_pedido`.
-10. Horário de funcionamento: 18h às 03h. Fora desse horário, informe que estamos fechados.
+10. Horário de atendimento (só para informar se o cliente perguntar): {horario}. Quem abre e fecha a loja é a equipe pelo painel: se você está respondendo, a loja está ABERTA agora. NUNCA diga que estamos fechados nem recuse um pedido por causa do horário.
 11. Se o cliente pedir o cardápio, o menu, os preços ou perguntar o que tem disponível, use a ferramenta `mostrar_cardapio` em vez de escrever o cardápio você mesmo. O cardápio enviado ao cliente mostra só os modelos e preços, SEM os sabores.
 12. Se o cliente disser que quer pedir/comprar (ex.: "quero um pod", "gostaria de fazer um pedido") sem dizer o modelo, use `mostrar_cardapio` — NUNCA pergunte "qual modelo?" sem mostrar os modelos. Também use `mostrar_cardapio` se o cliente parecer perdido ou não souber o que escolher.
 13. Os itens do cardápio são numerados. Se o cliente pedir pelo número (ex.: "quero o 3"), use o item correspondente.
@@ -269,9 +268,12 @@ CARDÁPIO (com os sabores, só para sua referência):
 """
 
 
-def gerar_system_prompt() -> str:
+def gerar_system_prompt(horario: str = '') -> str:
     """System prompt com o cardápio atual (muda quando o painel edita o estoque)."""
-    return _SYSTEM_PROMPT.format(cardapio=gerar_menu_texto(com_sabores=True))
+    return _SYSTEM_PROMPT.format(
+        cardapio=gerar_menu_texto(com_sabores=True, horario=horario),
+        horario=horario.strip() or 'não informado',
+    )
 
 # ── Definição das Tools (Function Calling) ──
 TOOLS = [
@@ -437,10 +439,11 @@ async def processar_mensagem(
     """
     client = _get_client()
     historico = _reparar_historico(historico)
+    config = await Configuracao.aobter()
 
     # Monta mensagens com system prompt + histórico + nova mensagem
     mensagens = [
-        {"role": "system", "content": gerar_system_prompt()},
+        {"role": "system", "content": gerar_system_prompt(config.horario_atendimento)},
         *historico,
         {"role": "user", "content": mensagem_usuario},
     ]
@@ -556,3 +559,36 @@ async def transcrever_audio(conteudo: bytes, mimetype: str = 'audio/ogg') -> str
         logger.exception('Erro ao transcrever áudio')
         return ''
     return (resposta.text or '').strip()
+
+
+async def descrever_imagem(conteudo: bytes, mimetype: str = 'image/jpeg') -> str:
+    """Descreve a foto que o cliente mandou (ex.: print de um pod). '' se falhar.
+
+    A descrição vira texto para o atendimento normal, como na transcrição de
+    áudio; o cardápio vai junto para a IA usar os mesmos nomes de modelo/sabor.
+    """
+    imagem = f"data:{mimetype};base64,{base64.b64encode(conteudo).decode()}"
+    instrucao = (
+        'O cliente de uma loja de pods/vapes mandou esta foto no WhatsApp. '
+        'Diga em UMA frase curta, em português, o que aparece. Se for um pod/vape, '
+        'informe marca, modelo, puffs e sabor que estiverem visíveis, usando os '
+        'nomes do cardápio abaixo quando corresponderem. Não invente o que não '
+        'dá para ver.\n\n' + gerar_menu_texto(com_sabores=True, rodape=False)
+    )
+    try:
+        resposta = await _get_client().chat.completions.create(
+            model=settings.OPENAI_MODEL,
+            messages=[{
+                'role': 'user',
+                'content': [
+                    {'type': 'text', 'text': instrucao},
+                    {'type': 'image_url', 'image_url': {'url': imagem, 'detail': 'auto'}},
+                ],
+            }],
+            temperature=0,
+            max_tokens=120,
+        )
+    except Exception:
+        logger.exception('Erro ao descrever imagem')
+        return ''
+    return (resposta.choices[0].message.content or '').strip()
