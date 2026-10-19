@@ -226,7 +226,7 @@ async def _enviar_pdf_cardapio(telefone: str, rodape: bool = True) -> bool:
 _BOAS_VINDAS = (
     'Olá! 👋 Bem-vindo ao Assistente Virtual da *Vape Rio Delivery*! 🌙\n\n'
     'Aqui embaixo vai nosso cardápio com os modelos e preços. '
-    'É só me dizer qual modelo você quer que eu te mostro os sabores 😉\n\n'
+    'Me fala qual modelo você quer que eu te mando os sabores disponíveis =)\n\n'
     '🙋 Prefere falar com uma pessoa? Digite *atendente* a qualquer momento.'
 )
 
