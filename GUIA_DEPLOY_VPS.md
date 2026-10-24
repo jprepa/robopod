@@ -70,14 +70,9 @@ git pull origin main
 for i in 1 2 3 4; do python3 -c "import secrets; print(secrets.token_urlsafe(40))"; done
 ```
 
-**Troque a senha do banco primeiro, com o banco ainda rodando** (só mudar o `.env` não
-basta: a senha fica gravada dentro do banco). Use o 1º valor:
-
-```bash
-docker compose exec db psql -U robopod -c "ALTER USER robopod WITH PASSWORD 'VALOR_1';"
-```
-
-Agora edite o `.env` (`nano .env`) e deixe estas linhas assim:
+Primeiro edite o `.env` (`nano .env`). O `docker-compose.yml` novo não aceita nenhum
+comando `docker compose` (nem o `exec` logo abaixo) sem essas variáveis. Mexer no `.env`
+não afeta os containers que estão rodando. Deixe estas linhas assim:
 
 ```env
 POSTGRES_PASSWORD=VALOR_1
@@ -92,6 +87,16 @@ PAINEL_URL=https://robopod.SEU-TAILNET.ts.net
 RETENCAO_ENDERECO_DIAS=3
 RETENCAO_MENSAGENS_DIAS=3
 ```
+
+**Agora troque a senha dentro do banco**, que ainda roda com a senha antiga (só mudar o
+`.env` não basta: a senha fica gravada dentro do banco). Use o mesmo `VALOR_1` do `.env`;
+deve aparecer `ALTER ROLE`:
+
+```bash
+docker compose exec db psql -U robopod -c "ALTER USER robopod WITH PASSWORD 'VALOR_1';"
+```
+
+Pode repetir este comando à vontade (vale o último), mas sempre **antes** do Passo S5.
 
 > Trocar a `DJANGO_SECRET_KEY` desloga todo mundo do painel (é só entrar de novo).
 > Se a chave da OpenAI já passou por print, mensagem ou outro PC, gere uma nova em
