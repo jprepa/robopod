@@ -431,14 +431,23 @@ async def _handler_atendimento_llm(
         for item in itens:
             await enviar_whatsapp(sessao.telefone, gerar_sabores_texto(item))
 
-    elif resultado.tipo == 'fechar_pedido':
-        itens = resultado.dados.get('itens', [])
-        if not itens:
-            await sessao.asave(update_fields=['historico_mensagens', 'ultima_interacao'])
-            await enviar_whatsapp(
-                sessao.telefone, '😕 Não entendi os itens do pedido. Pode repetir o que deseja?',
-            )
+    elif resultado.tipo == 'confirmar_itens':
+        if await _avisou_itens_invalidos(sessao, resultado.dados):
             return
+        await sessao.asave(update_fields=['historico_mensagens', 'ultima_interacao'])
+        resumo, subtotal = _resumo_itens(resultado.dados['itens'])
+        await enviar_whatsapp(
+            sessao.telefone,
+            f"📝 *Confere seu pedido:*\n\n"
+            f"{resumo}\n\n"
+            f"🛍️ Subtotal: *{formatar_preco(subtotal)}*\n\n"
+            f"_Confirma o pedido?_",
+        )
+
+    elif resultado.tipo == 'fechar_pedido':
+        if await _avisou_itens_invalidos(sessao, resultado.dados):
+            return
+        itens = resultado.dados['itens']
 
         # Preço vem do banco (não da IA) e o estoque é conferido
         itens, problemas = await catalogo.validar_itens(itens)
@@ -475,6 +484,21 @@ async def _handler_atendimento_llm(
         await _transferir_para_humano(
             sessao, resultado.dados.get('motivo', 'Não especificado'),
         )
+
+
+async def _avisou_itens_invalidos(sessao: SessaoChat, dados: dict) -> bool:
+    """Itens que a IA escolheu e não existem no cardápio (modelo, sabor):
+    avisa o cliente com as opções reais em vez de confirmar algo inventado."""
+    if dados.get('itens') and not dados.get('problemas'):
+        return False
+    if dados.get('problemas'):
+        aviso = '😕 ' + '\n\n'.join(dados['problemas']) + '\n\n_Qual vai ser?_'
+        sessao.historico_mensagens.append({'role': 'assistant', 'content': aviso})
+    else:
+        aviso = '😕 Não entendi os itens do pedido. Pode repetir o que deseja?'
+    await sessao.asave(update_fields=['historico_mensagens', 'ultima_interacao'])
+    await enviar_whatsapp(sessao.telefone, aviso)
+    return True
 
 
 def _normalizar(texto: str) -> str:
@@ -837,7 +861,7 @@ async def _loja_fechada_respondeu(telefone: str) -> bool:
     return True
 
 
-async def _bot_pausado_tratou(telefone: str, texto: str, tipo_interacao: str) -> bool:
+async def _bot_pausado_tratou(telefone: str, texto: str, tipo_interacao: str, data: dict) -> bool:
     """Bot pausado no painel: nenhuma resposta automática, nem a de loja fechada.
 
     A mensagem já ficou registrada para o atendente responder pelo painel.
@@ -850,8 +874,23 @@ async def _bot_pausado_tratou(telefone: str, texto: str, tipo_interacao: str) ->
     if tipo_interacao == 'midia':
         sessao = await SessaoChat.objects.filter(telefone=telefone).afirst()
         if sessao is not None and sessao.estado_atual == SessaoChat.Estado.AGUARDANDO_COMPROVANTE:
+            await _guardar_comprovante(telefone, data)
             await _handler_aguardando_comprovante(sessao, texto)
     return True
+
+
+async def _guardar_comprovante(telefone: str, data: dict) -> None:
+    """Salva a imagem/PDF enviada na etapa do comprovante no pedido, para o
+    operador conferir no painel. Falhas não impedem o fluxo do pedido."""
+    sessao = await SessaoChat.objects.filter(telefone=telefone).afirst()
+    if sessao is None or sessao.estado_atual != SessaoChat.Estado.AGUARDANDO_COMPROVANTE:
+        return
+    try:
+        midia = await baixar_midia(data)
+        if midia is not None:
+            await servicos.salvar_comprovante(sessao.carrinho_temporario.get('pedido_id'), *midia)
+    except Exception:
+        logger.exception('Falha ao guardar o comprovante de %s', telefone)
 
 
 async def _transcrever_audio(data: dict) -> str:
@@ -922,7 +961,7 @@ async def evolution_webhook(request) -> JsonResponse:
         logger.info('Cliente %s bloqueado, mensagem ignorada', telefone)
         return JsonResponse({'status': 'cliente bloqueado'})
 
-    if await _bot_pausado_tratou(telefone, texto, tipo_interacao):
+    if await _bot_pausado_tratou(telefone, texto, tipo_interacao, body.get('data', body)):
         return JsonResponse({'status': 'bot pausado'})
 
     if await _loja_fechada_respondeu(telefone):
@@ -971,6 +1010,10 @@ async def evolution_webhook(request) -> JsonResponse:
                 'Se preferir, digite *atendente*.',
             )
             return JsonResponse({'status': 'ok'})
+
+    # Comprovante: guarda a imagem/PDF no pedido antes de o handler marcá-lo como recebido
+    if tipo_interacao == 'midia' and sessao.estado_atual == SessaoChat.Estado.AGUARDANDO_COMPROVANTE:
+        await _guardar_comprovante(telefone, body.get('data', body))
 
     # Fora do atendimento LLM, botões viram palavras-chave (ex.: cancelar)
     if tipo_interacao in ('botao', 'lista'):

@@ -21,6 +21,8 @@ from .models import Categoria, Produto, Variante
 _TTL_SEGUNDOS = 60
 # Semelhança mínima para casar o nome escrito pela IA com um produto
 _SIMILARIDADE_MINIMA = 0.6
+# Para o sabor é bem mais rígida: só cobre erro de digitação, nunca outro sabor
+_SIMILARIDADE_SABOR = 0.85
 
 _cache: dict = {'categorias': []}
 _carregado_em = 0.0
@@ -143,32 +145,61 @@ def localizar_item(referencia: str, itens: list[dict]) -> dict | None:
     return melhor
 
 
-def _localizar(nome: str, produtos: list[Produto]) -> tuple[Produto, Variante | None] | None:
-    melhor, melhor_nota = None, _SIMILARIDADE_MINIMA
-    for p in produtos:
-        variantes = [v for v in p.variantes.all() if v.ativo]
-        candidatos = [(f'{p.nome} - {v.nome}', v) for v in variantes] or [(p.nome, None)]
-        for texto, variante in candidatos:
-            nota = _similaridade(nome, texto)
-            if nota > melhor_nota:
-                melhor, melhor_nota = (p, variante), nota
-    return melhor
+def _contem(trecho: str, texto: str) -> bool:
+    """`trecho` aparece inteiro (palavras completas) em `texto`, já normalizados."""
+    return bool(trecho) and re.search(rf'(?<!\w){re.escape(trecho)}(?!\w)', texto) is not None
+
+
+def localizar_variante(referencia: str, variantes: list[dict]) -> dict | None:
+    """Acha o sabor/opção (dicts de `atual()`) que a IA escolheu.
+
+    Aceita o nome exato (sem diferença de acento, emoji ou maiúsculas), parte
+    dele quando só um sabor combina ("watermelon" -> "Strawberry Apple
+    Watermelon"), o nome com o modelo junto ou um erro de digitação leve.
+    Na dúvida devolve None: o cliente escolhe na lista em vez de o bot chutar.
+    """
+    alvo = _normalizar(referencia)
+    if not alvo:
+        return None
+    nomes = [_normalizar(v['nome']) for v in variantes]
+    for variante, nome in zip(variantes, nomes):
+        if nome == alvo:
+            return variante
+
+    contem = [v for v, nome in zip(variantes, nomes) if _contem(alvo, nome)]
+    if contem:
+        return contem[0] if len(contem) == 1 else None
+
+    # "Ignite V35 - Cherry Ice": o sabor veio junto com o modelo
+    dentro = [(len(nome), v) for v, nome in zip(variantes, nomes) if _contem(nome, alvo)]
+    if dentro:
+        return max(dentro, key=lambda par: par[0])[1]
+
+    notas = sorted(
+        ((difflib.SequenceMatcher(None, alvo, nome).ratio(), i) for i, nome in enumerate(nomes)),
+        reverse=True,
+    )
+    if notas and notas[0][0] >= _SIMILARIDADE_SABOR and (
+        len(notas) == 1 or notas[1][0] < notas[0][0]
+    ):
+        return variantes[notas[0][1]]
+    return None
 
 
 def _validar_itens(itens: list[dict]) -> tuple[list[dict], list[str]]:
-    produtos = list(
-        Produto.objects.filter(ativo=True, categoria__ativo=True).prefetch_related('variantes'),
-    )
     validados, problemas = [], []
     for item in itens:
         quantidade = max(1, int(item.get('quantidade') or 1))
-        achado = _localizar(str(item.get('nome', '')), produtos)
-        if achado is None:
-            # Item não reconhecido: mantém o que a IA mandou para não travar o pedido
-            validados.append({**item, 'quantidade': quantidade})
+        produto = Produto.objects.filter(
+            slug=item.get('produto_slug'), ativo=True, categoria__ativo=True,
+        ).first()
+        variante = None
+        if produto is not None and item.get('variante_slug'):
+            variante = produto.variantes.filter(slug=item['variante_slug'], ativo=True).first()
+        if produto is None or (item.get('variante_slug') and variante is None):
+            problemas.append(f"{item.get('nome', 'um dos itens')} não está mais disponível")
             continue
 
-        produto, variante = achado
         nome = f'{produto.nome} - {variante.nome}' if variante else produto.nome
         estoque = variante.estoque if variante else produto.estoque
         if estoque is not None and quantidade > estoque:
@@ -187,7 +218,8 @@ def _validar_itens(itens: list[dict]) -> tuple[list[dict], list[str]]:
 
 
 async def validar_itens(itens: list[dict]) -> tuple[list[dict], list[str]]:
-    """Casa os itens da IA com o catálogo, corrige preços e checa estoque.
+    """Confere no banco os itens já casados com o cardápio (`conferir_itens` do
+    bot), corrige preços e checa estoque.
 
     Returns:
         (itens validados, lista de problemas de estoque para avisar o cliente).

@@ -160,6 +160,10 @@ class Pedido(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
         help_text='Quem lançou a venda manual ou aprovou o pagamento do pedido do WhatsApp',
     )
+    comprovante = models.FileField(
+        upload_to='comprovantes/', blank=True,
+        help_text='Imagem ou PDF do comprovante PIX enviado pelo cliente no WhatsApp',
+    )
     estoque_baixado = models.BooleanField(default=False)
     criado_em = models.DateTimeField(default=timezone.now, db_index=True)
     atualizado_em = models.DateTimeField(auto_now=True)
@@ -169,6 +173,10 @@ class Pedido(models.Model):
 
     def __str__(self):
         return f'Pedido #{self.pk}'
+
+    @property
+    def comprovante_eh_pdf(self) -> bool:
+        return self.comprovante.name.lower().endswith('.pdf')
 
 
 class ItemPedido(models.Model):

@@ -57,6 +57,11 @@ Evolution API (Webhook POST)
 
 **Fluxo Híbrido:**
 - **Fase 1 (LLM):** A IA atua como garçom digital com guardrails rígidos.
+  Ela interpreta o que o cliente escreveu ("o de melancia", "cereja", erro de digitação)
+  e escolhe modelo + sabor do cardápio; o código confere a escolha (`conferir_itens`)
+  antes de enviar o resumo "Confere seu pedido" (`confirmar_itens`) e de novo no
+  `fechar_pedido`. Sabor ou modelo que não existe nunca é confirmado: o cliente
+  recebe os sabores disponíveis daquele modelo para escolher.
 - **Fase 2 (Determinística):** Django assume para cotação de frete e cobrança.
 - **Escape (Humano):** Botão de pânico transfere para atendente.
 
@@ -485,10 +490,10 @@ Content-Type: application/json
 
 | Seção | O que faz |
 |-------|-----------|
-| **Dashboard** | Faturamento de hoje e do período (7/30/90 dias) com variação, gráfico de faturamento por dia, mais vendidos, estoque baixo e alertas (conversas aguardando atendente, comprovantes a conferir). Conta só pedidos pagos/em entrega/entregues. O "dia" vira às `PAINEL_VIRADA_DIA_HORA` (padrão 6h), então a venda da 01h entra na noite anterior. |
+| **Dashboard** | Faturamento de hoje e do período (7/30/90 dias) com variação, gráfico de faturamento por dia e mais vendidos (os alertas de conversas aguardando atendente e comprovantes a conferir ficam só na aba Início). Conta só pedidos pagos/em entrega/entregues. O "dia" vira às `PAINEL_VIRADA_DIA_HORA` (padrão 6h), então a venda da 01h entra na noite anterior. |
 | **Conversas** | Caixa de entrada atualizada a cada 10 s, com filtros (aguardando atendente, não lidas, com pedido aberto) e busca por nome/número. Dentro da conversa, as mensagens novas aparecem sozinhas e dá para responder pelo painel (sai pelo WhatsApp da loja), usar respostas rápidas (botões ou `/comando`; veja abaixo), **assumir** a conversa (o bot para de responder) ou **devolver ao bot**. |
 | **Clientes** | Cadastro por número, criado automaticamente na primeira mensagem (com o nome do perfil do WhatsApp). Mostra total gasto, nº de pedidos, último pedido e o que mais pede. Dá para editar nome/observações e **bloquear** o número (o bot passa a ignorá-lo). |
-| **Pedidos** | Criados automaticamente quando o frete é cotado. Status: aguardando pagamento → comprovante recebido → pago → saiu para entrega → entregue (ou cancelado). Cada mudança pode avisar o cliente no WhatsApp; cancelar devolve o estoque; entregue/cancelado devolve a conversa ao bot. |
+| **Pedidos** | Criados automaticamente quando o frete é cotado. O comprovante (imagem ou PDF) enviado pelo cliente fica salvo em `media/comprovantes/` e aparece direto na tela do pedido, ao lado do botão de status, sem precisar abrir o WhatsApp no celular (só para usuários logados). Ao confirmar o pagamento (status pago, saiu para entrega ou entregue) o comprovante é **apagado automaticamente** do disco e do pedido; se o pedido for cancelado, o arquivo é mantido. Status: aguardando pagamento → comprovante recebido → pago → saiu para entrega → entregue (ou cancelado). Cada mudança pode avisar o cliente no WhatsApp; cancelar devolve o estoque; entregue/cancelado devolve a conversa ao bot. |
 | **Estoque** | Cardápio do bot: categorias, produtos, preços, sabores/opções e estoque, com ajuste rápido (+/−, preço, ocultar). Vale na hora para o bot. Estoque vazio = não controla; zerado ou oculto some do cardápio. O pedido reserva o estoque ao ser criado. |
 | **Auditoria** | Só para superusuários. Registra quem fez cada ação, quando e de qual IP: logins (inclusive senha errada), respostas e assumir/devolver conversa, edição e bloqueio de cliente, mudança de status, venda manual, ajustes de estoque/preço, produtos, categorias e configurações. Mostra o antes → depois de cada campo e tem link para o item. Também registra o que o **Bot** faz sozinho (pedido criado, comprovante recebido). Cliques seguidos no +/− do estoque viram um registro só. Os registros não podem ser editados nem apagados (no admin ficam só para leitura). |
 
@@ -583,6 +588,15 @@ curl -X POST http://localhost:8000/webhook/evolution/ \
 - Acima de `FRETE_DISTANCIA_MAXIMA_KM` → atendente humano; o grupo de avisos mostra o motivo e
   como o endereço foi interpretado no mapa.
 - Fixe `LOJA_COORDENADAS` no `.env` para a origem nunca depender da geocodificação.
+
+### Bot confirma ou recusa o sabor errado
+
+- O sabor escrito pela IA é casado com o cardápio em `painel/catalogo.py`
+  (`localizar_variante`): nome exato (ignora acento, emoji e maiúsculas), parte do nome
+  quando só um sabor combina ("watermelon" → "Strawberry Apple Watermelon") ou erro de
+  digitação leve. Na dúvida (ex.: "ice" combina com vários) o cliente recebe a lista.
+- Traduções e apelidos ("melancia", "o de cereja") ficam a cargo da IA (regra 16 do
+  prompt em `core/llm_service.py`); o código só garante que o resultado existe.
 
 ### Cardápio não aparece como lista
 

@@ -28,6 +28,7 @@ urlpatterns = [
     path('pedidos/venda-manual/', views.venda_manual, name='venda_manual'),
     path('pedidos/<int:pk>/', views.pedido, name='pedido'),
     path('pedidos/<int:pk>/status/', views.pedido_status, name='pedido_status'),
+    path('pedidos/<int:pk>/comprovante/', views.pedido_comprovante, name='pedido_comprovante'),
 
     path('estoque/', views.estoque, name='estoque'),
     path('estoque/<str:tipo>/<int:pk>/ajustar/', views.estoque_ajustar, name='estoque_ajustar'),

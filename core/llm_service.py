@@ -125,6 +125,54 @@ def localizar_item(referencia: str) -> dict | None:
     return catalogo.localizar_item(referencia, itens)
 
 
+def _problema_sabor(item: dict, sabor: str) -> str:
+    lista = '\n'.join(v['nome'] for v in item['variantes'])
+    titulo = _titulo_item(item['nome'])
+    if sabor:
+        return f'Não temos *{sabor}* no *{titulo}*. Os sabores disponíveis são:\n\n{lista}'
+    return f'Qual sabor do *{titulo}*? Temos:\n\n{lista}'
+
+
+def conferir_itens(itens: list[dict]) -> tuple[list[dict], list[str]]:
+    """Casa os itens escolhidos pela IA (modelo + sabor) com o cardápio atual.
+
+    Só passa o que existe: modelo não encontrado, sabor faltando ou sabor que o
+    modelo não tem viram problemas (já com os sabores disponíveis, para o
+    cliente escolher). Nome e preço saem do cardápio, não da IA.
+
+    Returns:
+        (itens conferidos, problemas para avisar o cliente).
+    """
+    conferidos, problemas = [], []
+    for pedido in itens:
+        referencia = str(pedido.get('modelo') or pedido.get('nome') or '').strip()
+        item = localizar_item(referencia) if referencia else None
+        if item is None:
+            problemas.append(f"Não encontrei *{referencia or 'esse item'}* no cardápio.")
+            continue
+
+        variante = None
+        if item['variantes']:
+            sabor = str(pedido.get('sabor') or '').strip()
+            variante = catalogo.localizar_variante(sabor, item['variantes'])
+            if variante is None:
+                problemas.append(_problema_sabor(item, sabor))
+                continue
+
+        try:
+            quantidade = max(1, int(pedido.get('quantidade') or 1))
+        except (TypeError, ValueError):
+            quantidade = 1
+        conferidos.append({
+            'nome': f"{item['nome']} - {variante['nome']}" if variante else item['nome'],
+            'quantidade': quantidade,
+            'preco_unitario': item['preco'],
+            'produto_slug': item['id'],
+            'variante_slug': variante['id'] if variante else None,
+        })
+    return conferidos, problemas
+
+
 # Limites da mensagem de lista do WhatsApp — acima disso a lista é rejeitada
 # ou simplesmente não aparece para o cliente.
 _LISTA_MAX_LINHAS = 10
@@ -254,14 +302,15 @@ REGRAS INVIOLÁVEIS:
 5. Seja simpático e use emojis com moderação.
 6. Se o cliente perguntar sobre algo fora do escopo da tabacaria (política, saúde, etc.), redirecione educadamente para o cardápio.
 7. Se o cliente pedir para falar com um humano, ou se você não souber responder, use IMEDIATAMENTE a ferramenta `solicitar_humano`. Se o cliente parecer com dúvida ou insatisfeito, lembre que ele pode digitar *atendente* para falar com uma pessoa.
-8. Quando o cliente confirmar que quer finalizar o pedido, use a ferramenta `fechar_pedido` com os itens e quantidades corretos.
-9. Sempre confirme o pedido com o cliente ANTES de chamar `fechar_pedido`.
+8. Quando o cliente tiver escolhido o que quer (modelo, sabor e quantidade), use a ferramenta `confirmar_itens` para enviar o resumo e pedir a confirmação. NUNCA escreva você mesmo "você escolheu…" ou "confirma o pedido?".
+9. Só use `fechar_pedido` depois que o cliente confirmar o resumo enviado por `confirmar_itens`, com os mesmos itens.
 10. Horário de atendimento (só para informar se o cliente perguntar): {horario}. Quem abre e fecha a loja é a equipe pelo painel: se você está respondendo, a loja está ABERTA agora. NUNCA diga que estamos fechados nem recuse um pedido por causa do horário.
 11. Se o cliente pedir o cardápio, o menu, os preços ou perguntar o que tem disponível, use a ferramenta `mostrar_cardapio` em vez de escrever o cardápio você mesmo. O cardápio enviado ao cliente mostra só os modelos e preços, SEM os sabores.
 12. Se o cliente disser que quer pedir/comprar (ex.: "quero um pod", "gostaria de fazer um pedido") sem dizer o modelo, use `mostrar_cardapio` — NUNCA pergunte "qual modelo?" sem mostrar os modelos. Também use `mostrar_cardapio` se o cliente parecer perdido ou não souber o que escolher.
 13. Os itens do cardápio são numerados. Se o cliente pedir pelo número (ex.: "quero o 3"), use o item correspondente.
 14. Quando o cliente escolher um modelo que tem sabores sem dizer qual sabor (ex.: "quero o V35", "o 2"), ou perguntar quais sabores um modelo tem, use a ferramenta `mostrar_sabores` em vez de listar os sabores você mesmo. Isso vale MESMO que a mensagem também pergunte quais modelos existem (ex.: "quero um V35, quais modelos tem?"): se o cliente citou um modelo, use `mostrar_sabores` com ele e NÃO `mostrar_cardapio`.
-15. Se o cliente já disser o modelo e o sabor (ex.: "1 Ignite V35 Cherry Ice"), NÃO use `mostrar_sabores`: siga com o pedido. No `fechar_pedido`, inclua o sabor no nome (ex.: "Ignite V35 (3.500 puffs) - Cherry Ice 🍒🧊").
+15. Se o cliente já disser o modelo e o sabor (ex.: "1 Ignite V35 Cherry Ice"), NÃO use `mostrar_sabores`: use `confirmar_itens`.
+16. O cliente nem sempre escreve o nome exato do sabor: pode escrever em português ("melancia", "o de cereja", "uva gelado"), abreviado ou com erro. Descubra a qual sabor DAQUELE MODELO no cardápio ele se refere e passe em `confirmar_itens` o nome exato do cardápio (ex.: "o de cereja" no V35 → "Cherry Ice"). Se nenhum sabor do modelo corresponder, NÃO confirme: diga que esse não tem e sugira os mais parecidos que existem (ex.: "melancia" → "Nesse modelo temos o Strawberry Apple Watermelon (morango, maçã e melancia), pode ser?"). Se mais de um sabor servir (ex.: "menta" → Icy Mint ou Menthol), pergunte qual. NUNCA cite nem aceite um sabor que não está no cardápio daquele modelo.
 
 CARDÁPIO (com os sabores, só para sua referência):
 {cardapio}
@@ -276,44 +325,68 @@ def gerar_system_prompt(horario: str = '') -> str:
     )
 
 # ── Definição das Tools (Function Calling) ──
+# Itens de `confirmar_itens` e `fechar_pedido`: modelo e sabor separados, para
+# o código conferir cada um no cardápio (o preço sai do banco, não da IA).
+_PARAMETROS_ITENS = {
+    "type": "object",
+    "properties": {
+        "itens": {
+            "type": "array",
+            "description": "Itens escolhidos pelo cliente",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "modelo": {
+                        "type": "string",
+                        "description": (
+                            "Nome do modelo exatamente como no cardápio "
+                            "(ex.: \"Ignite V35 (3.500 puffs)\") ou o número do item"
+                        ),
+                    },
+                    "sabor": {
+                        "type": "string",
+                        "description": (
+                            "Nome exato do sabor/opção como no cardápio daquele modelo "
+                            "(ex.: \"Cherry Ice\"), já traduzido do que o cliente escreveu. "
+                            "Omita se o modelo não tem sabores."
+                        ),
+                    },
+                    "quantidade": {
+                        "type": "integer",
+                        "description": "Quantidade do item",
+                        "minimum": 1,
+                    },
+                },
+                "required": ["modelo", "quantidade"],
+            },
+            "minItems": 1,
+        },
+    },
+    "required": ["itens"],
+}
+
 TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "confirmar_itens",
+            "description": (
+                "Envia ao cliente o resumo do que ele escolheu (com os nomes e "
+                "preços do cardápio) e pergunta se confirma. Chamada quando o "
+                "cliente já escolheu modelo, sabor e quantidade."
+            ),
+            "parameters": _PARAMETROS_ITENS,
+        },
+    },
     {
         "type": "function",
         "function": {
             "name": "fechar_pedido",
             "description": (
-                "Chamada quando o cliente CONFIRMA a compra. "
-                "Gera o carrinho com os itens e quantidades do pedido."
+                "Chamada quando o cliente CONFIRMA o resumo enviado por "
+                "`confirmar_itens`. Gera o carrinho com os itens do pedido."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "itens": {
-                        "type": "array",
-                        "description": "Lista de itens do pedido",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "nome": {
-                                    "type": "string",
-                                    "description": "Nome do item exatamente como no cardápio",
-                                },
-                                "quantidade": {
-                                    "type": "integer",
-                                    "description": "Quantidade do item",
-                                    "minimum": 1,
-                                },
-                                "preco_unitario": {
-                                    "type": "number",
-                                    "description": "Preço unitário do item em reais",
-                                },
-                            },
-                            "required": ["nome", "quantidade", "preco_unitario"],
-                        },
-                    },
-                },
-                "required": ["itens"],
-            },
+            "parameters": _PARAMETROS_ITENS,
         },
     },
     {
@@ -385,7 +458,7 @@ class LLMResult:
 
     def __init__(
         self,
-        tipo: str,  # 'texto' | 'fechar_pedido' | 'solicitar_humano' | 'mostrar_cardapio' | 'mostrar_sabores'
+        tipo: str,  # 'texto' | 'confirmar_itens' | 'fechar_pedido' | 'solicitar_humano' | 'mostrar_cardapio' | 'mostrar_sabores'
         conteudo: str = '',
         dados: dict[str, Any] | None = None,
     ):
@@ -494,11 +567,37 @@ async def processar_mensagem(
         logger.info('Function call: %s -> %s', nome_funcao, argumentos)
 
         conteudos = {
+            'confirmar_itens': 'Resumo enviado ao cliente; aguarde ele confirmar.',
             'fechar_pedido': 'Pedido fechado com sucesso!',
             'solicitar_humano': 'Transferindo para atendente humano.',
             'mostrar_cardapio': 'Cardápio enviado ao cliente.',
             'mostrar_sabores': 'Sabores enviados ao cliente; aguarde ele escolher.',
         }
+        # A resposta da ferramenta diz à IA o que o cliente realmente viu,
+        # para ela não depender de lembrar o cardápio inteiro.
+        conteudo = conteudos.get(nome_funcao, 'ok')
+        if nome_funcao in ('confirmar_itens', 'fechar_pedido'):
+            itens, problemas = conferir_itens(argumentos.get('itens') or [])
+            argumentos = {'itens': itens, 'problemas': problemas}
+            if problemas:
+                conteudo = (
+                    'Itens não conferem com o cardápio; o cliente foi avisado e '
+                    'viu as opções disponíveis. Aguarde ele escolher.\n\n'
+                    + '\n\n'.join(problemas)
+                )
+            elif nome_funcao == 'confirmar_itens' and itens:
+                conteudo = (
+                    'Resumo enviado ao cliente para confirmar: '
+                    + '; '.join(f"{i['quantidade']}x {i['nome']}" for i in itens)
+                    + '. Se ele confirmar, chame `fechar_pedido` com esses itens.'
+                )
+        elif nome_funcao == 'mostrar_sabores':
+            achados = [localizar_item(m) for m in argumentos.get('modelos') or []]
+            achados = list({i['id']: i for i in achados if i}.values())
+            if achados:
+                conteudo = 'Sabores enviados ao cliente; aguarde ele escolher.\n\n' + '\n\n'.join(
+                    gerar_sabores_texto(i) for i in achados
+                )
 
         # Adiciona a mensagem do assistente com tool_calls ao histórico,
         # seguida de uma resposta 'tool' para CADA chamada — a OpenAI rejeita
@@ -522,14 +621,14 @@ async def processar_mensagem(
             novo_historico.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
-                "content": conteudos.get(tc.function.name, 'ok'),
+                "content": conteudo if tc.id == tool_call.id else conteudos.get(tc.function.name, 'ok'),
             })
 
         if nome_funcao in conteudos:
             return (
                 LLMResult(
                     tipo=nome_funcao,
-                    conteudo=conteudos[nome_funcao],
+                    conteudo=conteudo,
                     dados=argumentos,
                 ),
                 novo_historico,

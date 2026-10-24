@@ -1,6 +1,8 @@
 """Painel da loja: dashboard, conversas, clientes, pedidos e estoque."""
 
 import logging
+import mimetypes
+import os
 import re
 from collections import defaultdict
 from datetime import datetime, time, timedelta
@@ -443,7 +445,6 @@ def dashboard(request):
         ),
         'melhores_clientes': _melhores_clientes(vendas_periodo),
         'novos_clientes': novos_clientes,
-        'pedidos_abertos': Pedido.objects.filter(status__in=_ABERTOS).count(),
         'virada': settings.PAINEL_VIRADA_DIA_HORA,
     })
 
@@ -909,6 +910,22 @@ def pedido(request, pk: int):
     return _render(request, 'painel/pedido.html', {
         'secao': 'pedidos', 'pedido': obj, 'status_choices': Pedido.Status.choices,
     })
+
+
+@login_required
+def pedido_comprovante(request, pk: int):
+    """Imagem/PDF do comprovante, servido só a quem está logado no painel."""
+    obj = get_object_or_404(Pedido, pk=pk)
+    if not obj.comprovante:
+        raise Http404
+    try:
+        arquivo = obj.comprovante.open('rb')
+    except FileNotFoundError:
+        raise Http404
+    resposta = FileResponse(arquivo, content_type=mimetypes.guess_type(obj.comprovante.name)[0] or 'application/octet-stream')
+    resposta['Content-Disposition'] = f'inline; filename="{os.path.basename(obj.comprovante.name)}"'
+    resposta['Cache-Control'] = 'private, max-age=3600'
+    return resposta
 
 
 @login_required

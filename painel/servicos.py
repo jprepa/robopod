@@ -6,6 +6,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from asgiref.sync import sync_to_async
+from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
@@ -199,7 +200,16 @@ def mudar_status(pedido: Pedido, status: str) -> None:
             _movimentar_estoque(pedido, -1)
             pedido.estoque_baixado = True
         pedido.status = status
-        pedido.save(update_fields=['status', 'estoque_baixado', 'atualizado_em'])
+        campos = ['status', 'estoque_baixado', 'atualizado_em']
+        # Pagamento confirmado: o comprovante já cumpriu o papel, então é apagado
+        # (o arquivo só sai do disco depois que a transação for confirmada)
+        if status in Pedido.STATUS_FATURADOS and pedido.comprovante:
+            arquivo = pedido.comprovante.name
+            storage = pedido.comprovante.storage
+            pedido.comprovante = ''
+            campos.append('comprovante')
+            transaction.on_commit(lambda: storage.delete(arquivo))
+        pedido.save(update_fields=campos)
 
 
 async def cancelar_pedido_cliente(pedido_id: int | None) -> None:
@@ -220,6 +230,28 @@ async def cancelar_pedido_cliente(pedido_id: int | None) -> None:
             Pedido.Status.AGUARDANDO_PAGAMENTO.label, Pedido.Status.CANCELADO.label,
         ]},
     )
+
+
+_EXTENSOES_COMPROVANTE = {
+    'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'application/pdf': 'pdf',
+}
+
+
+async def salvar_comprovante(pedido_id: int | None, conteudo: bytes, mimetype: str) -> None:
+    """Guarda a imagem/PDF do comprovante no pedido, para o operador conferir no painel."""
+    extensao = _EXTENSOES_COMPROVANTE.get(mimetype)
+    if not pedido_id or not conteudo or not extensao:
+        return
+    pedido = await Pedido.objects.filter(pk=pedido_id).afirst()
+    if pedido is None:
+        return
+    if pedido.comprovante:
+        await sync_to_async(pedido.comprovante.delete)(save=False)
+    # save=False + update: não sobrescreve o status que o bot muda em seguida
+    await sync_to_async(pedido.comprovante.save)(
+        f'pedido-{pedido_id}.{extensao}', ContentFile(conteudo), save=False,
+    )
+    await Pedido.objects.filter(pk=pedido_id).aupdate(comprovante=pedido.comprovante.name)
 
 
 async def marcar_comprovante(pedido_id: int | None) -> None:

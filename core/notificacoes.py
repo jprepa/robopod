@@ -358,8 +358,13 @@ async def baixar_midia(data: dict) -> tuple[bytes, str] | None:
     sem ele, pede o arquivo à Evolution pelo id da mensagem.
     """
     mensagem = data.get('message') or {}
+    documento = mensagem.get('documentMessage') or (
+        (mensagem.get('documentWithCaptionMessage') or {}).get('message') or {}
+    ).get('documentMessage')
     if 'imageMessage' in mensagem:
         midia, padrao = mensagem.get('imageMessage') or {}, 'image/jpeg'
+    elif documento is not None:
+        midia, padrao = documento, 'application/pdf'
     else:
         midia, padrao = mensagem.get('audioMessage') or {}, 'audio/ogg'
     mimetype = (midia.get('mimetype') or padrao).split(';')[0].strip()
