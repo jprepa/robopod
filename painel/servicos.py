@@ -93,9 +93,6 @@ def _criar_pedido(telefone: str, carrinho: dict, frete: dict) -> Pedido:
     with transaction.atomic():
         cliente, _ = Cliente.objects.get_or_create(telefone=telefone)
         endereco = carrinho.get('endereco', '')
-        if endereco:
-            Cliente.objects.filter(pk=cliente.pk).update(ultimo_endereco=endereco[:255])
-
         itens = carrinho.get('itens', [])
         subtotal = sum(Decimal(str(i['preco_unitario'])) * i['quantidade'] for i in itens)
         valor_frete = Decimal(str(frete.get('valor_frete') or 0))
@@ -201,9 +198,10 @@ def mudar_status(pedido: Pedido, status: str) -> None:
             pedido.estoque_baixado = True
         pedido.status = status
         campos = ['status', 'estoque_baixado', 'atualizado_em']
-        # Pagamento confirmado: o comprovante já cumpriu o papel, então é apagado
-        # (o arquivo só sai do disco depois que a transação for confirmada)
-        if status in Pedido.STATUS_FATURADOS and pedido.comprovante:
+        # Pagamento confirmado ou pedido cancelado: o comprovante já cumpriu o
+        # papel, então é apagado (o arquivo só sai do disco depois que a
+        # transação for confirmada)
+        if status in (*Pedido.STATUS_FATURADOS, Pedido.Status.CANCELADO) and pedido.comprovante:
             arquivo = pedido.comprovante.name
             storage = pedido.comprovante.storage
             pedido.comprovante = ''

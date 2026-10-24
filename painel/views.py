@@ -666,7 +666,7 @@ def _comandos_chat(cliente: Cliente, pedidos_abertos: list, respostas: list) -> 
     variaveis = {
         'nome': nome,
         'pix': settings.CHAVE_PIX,
-        'endereco': (pedido.endereco if pedido else '') or cliente.ultimo_endereco,
+        'endereco': pedido.endereco if pedido else '',
         'pedido': f'#{pedido.pk}' if pedido else '',
         'total': formatar_preco(float(pedido.total)) if pedido else '',
         'horario': Configuracao.obter().horario_atendimento,

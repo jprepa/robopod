@@ -17,7 +17,6 @@ class Cliente(models.Model):
     nome = models.CharField(max_length=120, blank=True)
     nome_whatsapp = models.CharField(max_length=120, blank=True, help_text='Nome do perfil no WhatsApp')
     observacoes = models.TextField(blank=True)
-    ultimo_endereco = models.CharField(max_length=255, blank=True)
     bloqueado = models.BooleanField(default=False, help_text='O bot ignora mensagens deste número')
     conversa_lida_em = models.DateTimeField(null=True, blank=True)
     ultima_mensagem_em = models.DateTimeField(null=True, blank=True, db_index=True)

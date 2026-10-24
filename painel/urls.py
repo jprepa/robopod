@@ -2,6 +2,7 @@ from django.contrib.auth import views as auth_views
 from django.urls import path
 
 from . import views
+from .autenticacao import FormularioLogin
 
 app_name = 'painel'
 
@@ -11,6 +12,7 @@ urlpatterns = [
     path('dashboard/', views.dashboard, name='dashboard'),
     path('entrar/', auth_views.LoginView.as_view(
         template_name='painel/login.html', redirect_authenticated_user=True,
+        authentication_form=FormularioLogin,
     ), name='login'),
     path('sair/', auth_views.LogoutView.as_view(), name='logout'),
     path('contadores/', views.contadores, name='contadores'),

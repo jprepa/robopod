@@ -5,6 +5,214 @@
 
 ---
 
+> **O Robopod já está rodando na VPS?** Siga a seção
+> **🔒 Versão segura: Tailscale, portas fechadas e limpeza de dados** logo abaixo.
+> Instalação do zero: Etapas 1 a 8 e depois essa seção a partir do Passo S2.
+
+---
+
+## 🔒 Versão segura: Tailscale, portas fechadas e limpeza de dados
+
+**Como fica:** nenhuma porta do Robopod abre para a internet. O painel, o `/admin/` e o
+manager da Evolution só abrem para quem está na VPN da equipe (Tailscale), com https. O
+bot continua funcionando igual: a Evolution sai da VPS para falar com o WhatsApp, e o
+webhook chega ao Django pela rede interna do Docker.
+
+```
+Celular/PC da equipe ──Tailscale (https)──▶ VPS 127.0.0.1:8000 (painel)
+WhatsApp ◀──────────── Evolution (sai da VPS) ──rede Docker──▶ app:8000/webhook
+Internet ──✖──▶ 8000, 8083 e 5432 (fechadas)
+```
+
+Reserve uns 40 minutos, fora do horário de atendimento: o bot fica fora do ar por alguns
+minutos no Passo S5.
+
+### Passo S1 — Backup do banco e do `.env`
+
+```bash
+ssh root@SEU_IP
+cd /root/robopod
+docker compose exec -T db pg_dump -U robopod robopod > ~/backup_robopod_$(date +%F_%H%M).sql
+cp .env ~/env_antes_tailscale
+ls -lh ~/backup_robopod_*        # confira que o arquivo não está vazio
+```
+
+### Passo S2 — Tailscale na VPS
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+tailscale up --hostname=robopod
+```
+
+O comando mostra um link: abra no navegador e entre com a conta Google **da loja** (a
+que vai administrar a VPN; ligue a verificação em duas etapas nela). Depois:
+
+1. No painel do Tailscale (login.tailscale.com) → **DNS**: confira que o **MagicDNS** está
+   ligado e clique em **Enable HTTPS**.
+2. Anote o nome da VPS, que aparece em **Machines**: algo como
+   `robopod.SEU-TAILNET.ts.net`. É esse endereço que a equipe vai abrir.
+
+### Passo S3 — Tailscale nos aparelhos da equipe
+
+1. No painel do Tailscale → **Users** → **Invite users**: convide o e-mail Google de cada
+   pessoa.
+2. Cada pessoa instala o app **Tailscale** (Android, iPhone ou Windows), entra com esse
+   e-mail e liga a chave. No celular dá para deixar sempre ligado.
+3. Quem sair da equipe: **Users** → remover a pessoa (e em **Machines**, os aparelhos
+   dela). O acesso acaba na hora. Tire também o login do painel no `/admin/`.
+
+### Passo S4 — Baixar a versão nova e gerar as chaves
+
+```bash
+cd /root/robopod
+git pull origin main
+# Gere 4 valores aleatórios (um por linha) e guarde num lugar seguro:
+for i in 1 2 3 4; do python3 -c "import secrets; print(secrets.token_urlsafe(40))"; done
+```
+
+**Troque a senha do banco primeiro, com o banco ainda rodando** (só mudar o `.env` não
+basta: a senha fica gravada dentro do banco). Use o 1º valor:
+
+```bash
+docker compose exec db psql -U robopod -c "ALTER USER robopod WITH PASSWORD 'VALOR_1';"
+```
+
+Agora edite o `.env` (`nano .env`) e deixe estas linhas assim:
+
+```env
+POSTGRES_PASSWORD=VALOR_1
+DJANGO_SECRET_KEY=VALOR_2
+EVOLUTION_API_KEY=VALOR_3
+WEBHOOK_TOKEN=VALOR_4
+DEBUG=False
+ALLOWED_HOSTS=localhost,127.0.0.1,app,robopod.SEU-TAILNET.ts.net
+CSRF_TRUSTED_ORIGINS=https://robopod.SEU-TAILNET.ts.net
+PAINEL_HTTPS=true
+PAINEL_URL=https://robopod.SEU-TAILNET.ts.net
+RETENCAO_ENDERECO_DIAS=3
+RETENCAO_MENSAGENS_DIAS=3
+```
+
+> Trocar a `DJANGO_SECRET_KEY` desloga todo mundo do painel (é só entrar de novo).
+> Se a chave da OpenAI já passou por print, mensagem ou outro PC, gere uma nova em
+> platform.openai.com e troque a `OPENAI_API_KEY` também.
+
+**Fixe a versão da Evolution** para ela não se atualizar sozinha num restart:
+
+```bash
+curl -s http://localhost:8083/ | grep -o '"version":"[^"]*"'
+```
+
+Coloque o número que aparecer no `.env`, com `v` na frente: `EVOLUTION_VERSION=v2.x.y`.
+
+### Passo S5 — Subir a versão nova
+
+```bash
+docker compose up -d --build --force-recreate --remove-orphans
+docker compose ps        # db, redis, evolution, app e limpeza: todos "Up"
+docker compose logs --tail=30 app
+```
+
+Confirme que as portas agora escutam só dentro da VPS (deve aparecer `127.0.0.1`, nunca
+`0.0.0.0`, e a 5432 não deve aparecer):
+
+```bash
+ss -tlnp | grep -E ':8000|:8083|:5432'
+```
+
+### Passo S6 — Webhook com o token
+
+A chave da Evolution mudou, então use a nova (`VALOR_3`) e o token (`VALOR_4`):
+
+```bash
+curl -X POST "http://localhost:8083/webhook/set/robopod" \
+  -H "Content-Type: application/json" \
+  -H "apikey: VALOR_3" \
+  -d '{
+    "url": "http://app:8000/webhook/evolution/?token=VALOR_4",
+    "webhook_by_events": false,
+    "webhook_base64": false,
+    "events": ["MESSAGES_UPSERT"]
+  }'
+```
+
+Mande um "oi" de outro celular para o número da loja e veja a resposta chegar. Se o log
+(`docker compose logs -f app`) mostrar `Webhook com token inválido recusado`, o token da
+URL não bate com o `WEBHOOK_TOKEN` do `.env`.
+
+### Passo S7 — Painel pelo Tailscale (https)
+
+```bash
+tailscale serve --bg 8000                 # painel: https://robopod.SEU-TAILNET.ts.net
+tailscale serve --bg --https=8443 8083    # manager da Evolution (QR Code), só para o admin
+tailscale serve status
+```
+
+Com o Tailscale ligado no celular ou no PC, abra `https://robopod.SEU-TAILNET.ts.net/painel/`.
+O QR Code da Evolution fica em `https://robopod.SEU-TAILNET.ts.net:8443/manager`.
+
+Se o login der **erro 403 (CSRF)**, o `CSRF_TRUSTED_ORIGINS` não bate com o endereço do
+navegador (precisa de `https://` e nenhuma barra no fim). Corrija o `.env` e rode
+`docker compose up -d app`.
+
+### Passo S8 — Fechar o firewall
+
+**Cuidado com o outro SaaS da VPS:** veja quais portas ele usa (`ss -tlnp`, normalmente
+80 e 443 do Nginx) e libere só elas. Não feche a sessão SSH atual até o fim deste passo.
+
+```bash
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow in on tailscale0      # tudo o que vem pela VPN da equipe
+ufw allow 80/tcp                # SÓ se o outro SaaS usa
+ufw allow 443/tcp               # SÓ se o outro SaaS usa
+ufw allow OpenSSH               # provisório, até testar o SSH pelo Tailscale
+ufw enable
+```
+
+Abra **outro** terminal no seu PC (com o Tailscale ligado) e teste o SSH pela VPN:
+`ssh root@robopod`. Funcionou? Então feche o SSH para a internet:
+
+```bash
+ufw delete allow OpenSSH
+ufw status verbose
+```
+
+Se o provedor da VPS tiver firewall próprio no painel dele, deixe abertas só as mesmas
+portas do outro SaaS. Se um dia perder o acesso, o **console web do provedor** continua
+entrando na VPS (guarde o login dele com verificação em duas etapas).
+
+Se você tinha seguido a Etapa 9 (Nginx do Robopod), tire o Robopod do Nginx, porque ele
+deixava painel e webhook abertos na internet:
+
+```bash
+rm -f /etc/nginx/sites-enabled/robopod && nginx -t && systemctl reload nginx
+```
+
+### Passo S9 — Conferir
+
+- Com o Tailscale **desligado** no celular, `http://SEU_IP:8000/painel/` **não** abre.
+- Com o Tailscale **ligado**, `https://robopod.SEU-TAILNET.ts.net/painel/` abre.
+- Um pedido de teste pelo WhatsApp vai até o fim, e o comprovante some do pedido ao
+  marcar como pago.
+- A limpeza diária está rodando:
+  `docker compose exec app python manage.py limpar_dados --simular`
+- No grupo de avisos do WhatsApp: **Dados do grupo → Mensagens temporárias → 24 horas**
+  (os avisos trazem o endereço do cliente).
+
+### Se algo der errado
+
+```bash
+cp ~/env_antes_tailscale .env
+git checkout HEAD@{1}       # volta o código para antes do git pull
+docker compose up -d --build --force-recreate
+```
+
+Se a senha do banco já tinha sido trocada no Passo S4, mantenha no `.env` restaurado a
+linha `POSTGRES_PASSWORD=VALOR_1`.
+
+---
+
 ## ⚠️ ANTES DE TUDO — Checagem da VPS
 
 Acesse sua VPS via SSH e rode esses comandos para mapear o que já está ocupado:
@@ -100,9 +308,12 @@ Troque **somente a porta da ESQUERDA** (a do host). Exemplos:
 
 | Porta padrão | Se estiver ocupada, troque para | Linha no docker-compose.yml |
 |:---:|:---:|:---|
-| `8000:8000` | `8001:8000` | No serviço `app` |
-| `8080:8080` | `8081:8080` | No serviço `evolution` |
-| `5432:5432` | `5433:5432` | No serviço `db` |
+| `127.0.0.1:8000:8000` | `127.0.0.1:8001:8000` | No serviço `app` |
+| `127.0.0.1:8083:8080` | `127.0.0.1:8084:8080` | No serviço `evolution` |
+
+> O banco não tem porta na VPS (só os containers falam com ele). Mantenha sempre o
+> `127.0.0.1:` na frente: sem ele, o Docker abre a porta para a internet **mesmo com o
+> firewall ligado**.
 
 > **Exemplo:** Se seu outro SaaS já usa a porta 8080, mude a Evolution para 8081:
 > ```yaml
@@ -129,7 +340,10 @@ Preencha com seus dados reais:
 # ── Django ──
 DJANGO_SECRET_KEY=cole-uma-chave-aleatoria-grande-aqui
 DEBUG=False
-ALLOWED_HOSTS=*
+ALLOWED_HOSTS=localhost,127.0.0.1,app,robopod.SEU-TAILNET.ts.net
+CSRF_TRUSTED_ORIGINS=https://robopod.SEU-TAILNET.ts.net
+PAINEL_HTTPS=true
+WEBHOOK_TOKEN=outra-chave-aleatoria-grande
 
 # ── PostgreSQL (não mexa se não mudou portas internas) ──
 POSTGRES_DB=robopod
@@ -224,13 +438,10 @@ Se retornar HTML, está vivo. ✅
 
 > Nas instruções abaixo, substitua `8080` pela porta que você usou se trocou (ex: `8081`).
 
-### 6.1 Libere a porta no firewall (se usa ufw):
+### 6.1 Não abra portas no firewall
 
-```bash
-# Só libere se precisa acessar de fora (para escanear QR Code no navegador)
-ufw allow 8080/tcp   # ou 8081 se trocou
-ufw allow 8000/tcp   # ou 8001 se trocou
-```
+O manager da Evolution (para o QR Code) abre pelo Tailscale: faça antes os Passos S2 e
+S7 da seção **🔒 Versão segura** e use o endereço do Passo 6.3.
 
 ### 6.2 Crie a instância do WhatsApp:
 
@@ -250,7 +461,7 @@ curl -X POST "http://localhost:8080/instance/create" \
 Abra no navegador do seu PC:
 
 ```
-http://SEU_IP_DA_VPS:8080/manager
+https://robopod.SEU-TAILNET.ts.net:8443/manager
 ```
 
 *(Use a apikey `minha-chave-evolution` se pedir login.)*
@@ -275,7 +486,7 @@ curl -X POST "http://localhost:8080/webhook/set/robopod" \
   -H "Content-Type: application/json" \
   -H "apikey: minha-chave-evolution" \
   -d '{
-    "url": "http://app:8000/webhook/evolution/",
+    "url": "http://app:8000/webhook/evolution/?token=SEU_WEBHOOK_TOKEN",
     "webhook_by_events": false,
     "webhook_base64": false,
     "events": [
@@ -346,7 +557,10 @@ curl -s "http://localhost:8080/webhook/find/robopod" \
 
 ---
 
-## ETAPA 9 — (Opcional) Nginx com seu domínio existente
+## ETAPA 9 — (Não recomendado) Nginx com seu domínio existente
+
+> ⚠️ Esta etapa deixa o painel e o webhook abertos na internet. Use o Tailscale
+> (seção **🔒 Versão segura**) no lugar dela.
 
 Se você já tem Nginx rodando para o outro SaaS, **NÃO recrie a config inteira**. Adicione um novo server block:
 
@@ -530,11 +744,8 @@ localizado). Se der `fora_area`, confira se `LOJA_COORDENADAS` está certo.
 
 ### Passo 9 — Abrir o painel
 
-- **Com domínio + SSL (recomendado):** confira se o Nginx está como na Etapa 9.2
-  (com `location /`), rode `nginx -t && systemctl reload nginx` e abra
-  `https://bot.seudominio.com.br/painel/`.
-- **Só para um teste rápido, sem domínio:** `http://SEU_IP:8000/painel/`. Sem HTTPS a
-  senha trafega aberta. Não use assim no dia a dia.
+Pelo Tailscale: `https://robopod.SEU-TAILNET.ts.net/painel/` (Passo S7 da seção
+**🔒 Versão segura**).
 
 Se o login der **erro 403 (CSRF)**, o `CSRF_TRUSTED_ORIGINS` não bate com o endereço
 que está no navegador (precisa ter `https://` e nenhuma barra no fim). Corrija o `.env`
@@ -587,10 +798,6 @@ Depois siga do **Passo 3** em diante. Se o repositório for privado, o `git fetc
 usuário e um **token** do GitHub (Settings → Developer settings → Personal access tokens)
 no lugar da senha.
 
-> **Segurança (recomendado):** com o Nginx na frente, troque no `docker-compose.yml` a linha
-> `- "8000:8000"` por `- "127.0.0.1:8000:8000"`. Assim o painel só abre pelo domínio com
-> HTTPS e não fica exposto pelo IP. O webhook da Evolution continua funcionando, porque
-> ela fala com o app pela rede interna do Docker.
 
 ---
 
@@ -630,8 +837,12 @@ s.save()
 print('Resetada!')
 "
 
-# Admin do Django
-# http://SEU_IP:8000/admin/
+# Rodar a limpeza de dados agora (o serviço "limpeza" já roda uma vez por dia)
+docker compose exec app python manage.py limpar_dados --simular
+docker compose exec app python manage.py limpar_dados
+
+# Admin do Django (com o Tailscale ligado)
+# https://robopod.SEU-TAILNET.ts.net/admin/
 ```
 
 ### Atualizar o cardápio (modelos, preços e sabores)
@@ -639,7 +850,8 @@ print('Resetada!')
 O cardápio do bot fica no arquivo `cardapio.txt` (raiz do projeto), no mesmo formato
 da lista de sabores: `Modelo - 3.500 puffs`, depois `R$ 90,00` e um sabor por linha.
 Marque com ❌ no começo da linha o sabor esgotado. Edite o arquivo (no PC, envie pelo
-Git; ou direto na VPS com `nano cardapio.txt`) e rode:
+Git; ou direto na VPS com `nano cardapio.txt`). O código fica dentro da imagem, então
+leve o arquivo novo para o container com `docker compose up -d --build app` e rode:
 
 ```bash
 # Mostra o que vai mudar, sem gravar
@@ -662,8 +874,9 @@ volta a aparecer. Ajustes do dia a dia (+/− estoque, preço) continuam pelo pa
 |----------|------------------------|---------|
 | Container não sobe | `docker compose logs app` | Leia o erro no log |
 | Conflito de porta | `ss -tlnp \| grep PORTA` | Troque a porta no docker-compose.yml |
-| WhatsApp desconectou | `curl .../connectionState/robopod` | Reconecte pelo manager :8080 |
-| Bot não responde | `docker compose logs -f app` | Verifique OPENAI_API_KEY no .env |
+| WhatsApp desconectou | `curl .../connectionState/robopod` | Reconecte pelo manager (`:8443/manager` no Tailscale) |
+| Bot não responde | `docker compose logs -f app` | Verifique OPENAI_API_KEY no .env; `token inválido` no log = `WEBHOOK_TOKEN` diferente da URL do webhook |
+| Painel não abre | `tailscale status` | Tailscale ligado no aparelho? `tailscale serve status` na VPS |
 | Erro 401 OpenAI | Chave inválida | Gere nova em platform.openai.com |
 | Frete não calcula | Log: "Timeout no scraping" | Confirme PLAYWRIGHT_HEADLESS=true |
 | Nginx deu erro | `nginx -t` | Corrija a syntax antes do reload |

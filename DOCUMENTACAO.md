@@ -12,7 +12,7 @@
 4. [Variáveis de Ambiente](#4-variáveis-de-ambiente)
 5. [Subindo o Projeto](#5-subindo-o-projeto)
 6. [Playwright no WSL2](#6-playwright-no-wsl2)
-7. [Ngrok — Expondo para a Internet](#7-ngrok--expondo-para-a-internet)
+7. [Segurança e dados dos clientes](#7-segurança-e-dados-dos-clientes)
 8. [Evolution API — Configuração do Webhook](#8-evolution-api--configuração-do-webhook)
 9. [Fluxo da Máquina de Estados](#9-fluxo-da-máquina-de-estados)
 10. [Estrutura do Projeto](#10-estrutura-do-projeto)
@@ -74,7 +74,6 @@ Evolution API (Webhook POST)
 | WSL2            | Ubuntu 22.04+ | `wsl --install`                     |
 | Docker Desktop  | 4.0+          | https://docker.com/desktop          |
 | Docker Compose  | v2+           | Incluso no Docker Desktop           |
-| Ngrok           | 3.0+          | `snap install ngrok` ou binário     |
 | Python          | 3.11+         | Incluso na imagem Docker            |
 
 ---
@@ -192,14 +191,18 @@ CHAVE_PIX=seu-email@pix.com
 
 | Variável              | Obrigatória | Descrição                                      |
 |-----------------------|:-----------:|-------------------------------------------------|
-| `DJANGO_SECRET_KEY`   | Sim         | Chave secreta do Django                         |
-| `DEBUG`               | Não         | `True` para desenvolvimento (padrão: `True`)    |
+| `DJANGO_SECRET_KEY`   | Sim         | Chave secreta do Django (sem ela o app não sobe com `DEBUG=False`) |
+| `DEBUG`               | Não         | `True` só no PC de desenvolvimento (padrão: `False`) |
+| `ALLOWED_HOSTS`       | Não         | Endereços aceitos (padrão: `localhost,127.0.0.1,app`; acrescente o do Tailscale) |
+| `PAINEL_HTTPS`        | Não         | `true` quando o painel abre por https: cookies seguros e HSTS |
+| `WEBHOOK_TOKEN`       | Sim         | Token secreto que a Evolution manda na URL do webhook (`?token=`) |
 | `OPENAI_API_KEY`      | Sim         | Chave da API da OpenAI                          |
 | `OPENAI_MODEL`        | Não         | Modelo a usar (padrão: `gpt-4o-mini`)           |
 | `OPENAI_TRANSCRICAO_MODEL` | Não    | Transcrição de áudios (padrão: `gpt-4o-mini-transcribe`) |
 | `EVOLUTION_API_URL`   | Sim         | URL base da Evolution API                       |
 | `EVOLUTION_API_KEY`   | Sim         | Chave de autenticação da Evolution API          |
 | `EVOLUTION_INSTANCE`  | Sim         | Nome da instância do WhatsApp                   |
+| `EVOLUTION_VERSION`   | Não         | Versão fixa da imagem da Evolution (padrão: `latest`) |
 | `ENDERECO_LOJA`       | Sim         | Endereço completo da loja (origem do frete)     |
 | `FRETE_MODO`          | Não         | `estimativa` (padrão) ou `uber_scraper`         |
 | `GOOGLE_MAPS_API_KEY` | Não         | Chave c/ Routes API; vazio = OpenStreetMap      |
@@ -218,7 +221,11 @@ CHAVE_PIX=seu-email@pix.com
 | `PAINEL_VIRADA_DIA_HORA` | Não      | Hora em que vira o dia nos relatórios (padrão: `6`) |
 | `POSTGRES_DB`         | Não         | Nome do banco (padrão: `robopod`)               |
 | `POSTGRES_USER`       | Não         | Usuário do banco (padrão: `robopod`)            |
-| `POSTGRES_PASSWORD`   | Não         | Senha do banco (padrão: `robopod_secret`)       |
+| `POSTGRES_PASSWORD`   | Sim         | Senha do banco (o docker-compose não sobe sem ela) |
+| `LOGIN_TENTATIVAS_MAXIMAS` | Não    | Senhas erradas seguidas até bloquear o login (padrão: `5`) |
+| `LOGIN_BLOQUEIO_MINUTOS` | Não      | Duração do bloqueio do login (padrão: `15`)     |
+| `RETENCAO_ENDERECO_DIAS` | Não      | Dias até apagar o endereço do pedido entregue/cancelado (padrão: `3`) |
+| `RETENCAO_MENSAGENS_DIAS` | Não     | Dias até apagar o histórico das conversas (padrão: `3`) |
 
 ---
 
@@ -227,8 +234,12 @@ CHAVE_PIX=seu-email@pix.com
 ### 5.1. Com Docker Compose (recomendado)
 
 ```bash
-# Build e sobe tudo
+# Produção (VPS): build e sobe tudo
 docker compose up --build -d
+
+# Desenvolvimento (PC, com DEBUG=True no .env): código recarregado a cada
+# alteração e banco em localhost:5432
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 
 # Verifica logs
 docker compose logs -f app
@@ -237,8 +248,9 @@ docker compose logs -f app
 docker compose exec app python manage.py createsuperuser
 ```
 
-O app estará disponível em `http://localhost:8000`.  
-O admin do Django em `http://localhost:8000/admin/`.
+O app fica em `http://localhost:8000` e o admin do Django em `http://localhost:8000/admin/`,
+**só na própria máquina** (as portas escutam em `127.0.0.1`). Na VPS a equipe acessa pelo
+Tailscale (veja a seção 7 e o `GUIA_DEPLOY_VPS.md`).
 
 ### 5.2. Sem Docker (desenvolvimento local)
 
@@ -303,41 +315,47 @@ browser = await p.chromium.launch(headless=True)
 
 ---
 
-## 7. Ngrok — Expondo para a Internet
+## 7. Segurança e dados dos clientes
 
-A Evolution API precisa enviar webhooks para o seu servidor.
-Em desenvolvimento local, use o Ngrok:
+**Nada fica aberto para a internet.** A Evolution conversa com o WhatsApp saindo do
+servidor, e o webhook chega ao Django pela rede interna do Docker (`http://app:8000`).
+Por isso nenhuma porta precisa ficar aberta:
 
-### 7.1. Instalar e autenticar
+| Serviço | Onde escuta | Quem acessa |
+|---|---|---|
+| Painel e admin (Django) | `127.0.0.1:8000` | A equipe, pelo Tailscale (`tailscale serve`) |
+| Manager da Evolution (QR Code) | `127.0.0.1:8083` | Só o administrador, pelo Tailscale |
+| PostgreSQL | sem porta | Só os containers (`docker compose exec db psql ...`) |
 
-```bash
-# Instalar
-sudo snap install ngrok
-# ou baixe de https://ngrok.com/download
+**Proteções no app**
 
-# Autenticar (gratuito com conta)
-ngrok config add-authtoken SEU_TOKEN
-```
+- `DEBUG` desligado por padrão e o app não sobe sem `DJANGO_SECRET_KEY` de verdade.
+- Webhook só aceita quem manda o `WEBHOOK_TOKEN` (na URL `?token=` ou no cabeçalho
+  `X-Webhook-Token`); sem o token responde `403`.
+- Proteção CSRF em todos os formulários do painel.
+- Login bloqueado por `LOGIN_BLOQUEIO_MINUTOS` depois de `LOGIN_TENTATIVAS_MAXIMAS` senhas
+  erradas seguidas (por usuário e por IP). Reiniciar o app zera os bloqueios.
+- Login expira em 12 h. Com `PAINEL_HTTPS=true`, cookies só trafegam por https.
+- A imagem Docker não leva `.env`, `media/` nem `.git` (`.dockerignore`).
 
-### 7.2. Iniciar o túnel
+**Dados dos clientes guardados por pouco tempo**
 
-```bash
-# Expõe a porta 8000
-ngrok http 8000
-```
+O serviço `limpeza` do docker-compose roda `python manage.py limpar_dados` uma vez por dia
+(dá para rodar na mão: `docker compose exec app python manage.py limpar_dados --simular`).
 
-Anote a URL gerada (ex: `https://abc123.ngrok-free.app`).
+| Dado | Quando sai |
+|---|---|
+| Comprovante PIX | Na hora em que o pagamento é confirmado ou o pedido é cancelado |
+| Endereço do pedido | `RETENCAO_ENDERECO_DIAS` depois de entregue, cancelado ou abandonado sem pagamento; 30 dias para qualquer outro status esquecido |
+| Mensagens das conversas (painel) | Mais antigas que `RETENCAO_MENSAGENS_DIAS` |
+| Contexto da IA e endereço do carrinho | Sessões paradas há mais de `RETENCAO_MENSAGENS_DIAS` (o estado da conversa não muda) |
+| Mensagens guardadas pela Evolution | Mais antigas que `RETENCAO_MENSAGENS_DIAS` (tabela `evolution."Message"`) |
 
-### 7.3. Configurar na Evolution API
+Telefone e nome do cliente ficam: são o que identifica o cliente. O endereço não é mais
+guardado na ficha do cliente, só no pedido.
 
-A URL do webhook na Evolution API será:
-
-```
-https://abc123.ngrok-free.app/webhook/evolution/
-```
-
-> **⚠️ Atenção:** A URL do Ngrok muda a cada reinicialização (plano gratuito).
-> Atualize o webhook na Evolution API sempre que reiniciar o Ngrok.
+> **Grupo de avisos:** os avisos ao grupo trazem o endereço do pedido. Ative as
+> *mensagens temporárias* (24 horas) no grupo para essas cópias não ficarem nos celulares.
 
 ---
 
@@ -350,7 +368,7 @@ curl -X POST "${EVOLUTION_API_URL}/webhook/set/${EVOLUTION_INSTANCE}" \
   -H "Content-Type: application/json" \
   -H "apikey: ${EVOLUTION_API_KEY}" \
   -d '{
-    "url": "https://SEU-NGROK.ngrok-free.app/webhook/evolution/",
+    "url": "http://app:8000/webhook/evolution/?token=SEU_WEBHOOK_TOKEN",
     "webhook_by_events": false,
     "webhook_base64": false,
     "events": [
@@ -358,6 +376,9 @@ curl -X POST "${EVOLUTION_API_URL}/webhook/set/${EVOLUTION_INSTANCE}" \
     ]
   }'
 ```
+
+`app` é o nome do serviço do Django no docker-compose: o webhook não sai da rede interna do
+Docker. `SEU_WEBHOOK_TOKEN` é o valor do `WEBHOOK_TOKEN` do `.env`.
 
 ---
 
@@ -452,9 +473,11 @@ robopod/
 ### Webhook Endpoint
 
 ```
-POST /webhook/evolution/
+POST /webhook/evolution/?token=SEU_WEBHOOK_TOKEN
 Content-Type: application/json
 ```
+
+Sem o token (ou com o token errado) responde `403`.
 
 **Payload esperado (Evolution API v2):**
 
@@ -493,7 +516,7 @@ Content-Type: application/json
 | **Dashboard** | Faturamento de hoje e do período (7/30/90 dias) com variação, gráfico de faturamento por dia e mais vendidos (os alertas de conversas aguardando atendente e comprovantes a conferir ficam só na aba Início). Conta só pedidos pagos/em entrega/entregues. O "dia" vira às `PAINEL_VIRADA_DIA_HORA` (padrão 6h), então a venda da 01h entra na noite anterior. |
 | **Conversas** | Caixa de entrada atualizada a cada 10 s, com filtros (aguardando atendente, não lidas, com pedido aberto) e busca por nome/número. Dentro da conversa, as mensagens novas aparecem sozinhas e dá para responder pelo painel (sai pelo WhatsApp da loja), usar respostas rápidas (botões ou `/comando`; veja abaixo), **assumir** a conversa (o bot para de responder) ou **devolver ao bot**. |
 | **Clientes** | Cadastro por número, criado automaticamente na primeira mensagem (com o nome do perfil do WhatsApp). Mostra total gasto, nº de pedidos, último pedido e o que mais pede. Dá para editar nome/observações e **bloquear** o número (o bot passa a ignorá-lo). |
-| **Pedidos** | Criados automaticamente quando o frete é cotado. O comprovante (imagem ou PDF) enviado pelo cliente fica salvo em `media/comprovantes/` e aparece direto na tela do pedido, ao lado do botão de status, sem precisar abrir o WhatsApp no celular (só para usuários logados). Ao confirmar o pagamento (status pago, saiu para entrega ou entregue) o comprovante é **apagado automaticamente** do disco e do pedido; se o pedido for cancelado, o arquivo é mantido. Status: aguardando pagamento → comprovante recebido → pago → saiu para entrega → entregue (ou cancelado). Cada mudança pode avisar o cliente no WhatsApp; cancelar devolve o estoque; entregue/cancelado devolve a conversa ao bot. |
+| **Pedidos** | Criados automaticamente quando o frete é cotado. O comprovante (imagem ou PDF) enviado pelo cliente fica salvo em `media/comprovantes/` e aparece direto na tela do pedido, ao lado do botão de status, sem precisar abrir o WhatsApp no celular (só para usuários logados). Ao confirmar o pagamento (status pago, saiu para entrega ou entregue) ou cancelar o pedido, o comprovante é **apagado automaticamente** do disco e do pedido. O endereço do pedido é apagado `RETENCAO_ENDERECO_DIAS` depois da entrega (veja *Segurança e dados dos clientes*). Status: aguardando pagamento → comprovante recebido → pago → saiu para entrega → entregue (ou cancelado). Cada mudança pode avisar o cliente no WhatsApp; cancelar devolve o estoque; entregue/cancelado devolve a conversa ao bot. |
 | **Estoque** | Cardápio do bot: categorias, produtos, preços, sabores/opções e estoque, com ajuste rápido (+/−, preço, ocultar). Vale na hora para o bot. Estoque vazio = não controla; zerado ou oculto some do cardápio. O pedido reserva o estoque ao ser criado. |
 | **Auditoria** | Só para superusuários. Registra quem fez cada ação, quando e de qual IP: logins (inclusive senha errada), respostas e assumir/devolver conversa, edição e bloqueio de cliente, mudança de status, venda manual, ajustes de estoque/preço, produtos, categorias e configurações. Mostra o antes → depois de cada campo e tem link para o item. Também registra o que o **Bot** faz sozinho (pedido criado, comprovante recebido). Cliques seguidos no +/− do estoque viram um registro só. Os registros não podem ser editados nem apagados (no admin ficam só para leitura). |
 
@@ -548,13 +571,14 @@ docker compose exec db psql -U robopod -d robopod -c "SELECT 1;"
 
 ### Webhook da Evolution não chega
 
-1. Verifique se o Ngrok está rodando: `curl http://localhost:4040/api/tunnels`
-2. Confira a URL cadastrada na Evolution API
-3. Verifique os logs do Django: `docker compose logs -f app`
-4. Teste manualmente:
+1. Confira a URL cadastrada na Evolution API: `http://app:8000/webhook/evolution/?token=...`
+   com o mesmo valor do `WEBHOOK_TOKEN` do `.env`
+2. Verifique os logs do Django: `docker compose logs -f app`. `Webhook com token inválido
+   recusado` = token diferente; `WEBHOOK_TOKEN não definido` = falta a variável no `.env`
+3. Teste manualmente:
 
 ```bash
-curl -X POST http://localhost:8000/webhook/evolution/ \
+curl -X POST "http://localhost:8000/webhook/evolution/?token=SEU_WEBHOOK_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "event": "messages.upsert",

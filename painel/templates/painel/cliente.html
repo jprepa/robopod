@@ -47,7 +47,6 @@
         <div class="campo"><label for="id_nome">Nome</label>{{ form.nome }}<div class="ajuda">WhatsApp: {{ cliente.nome_whatsapp|default:"—" }}</div></div>
         <div class="campo"><label for="id_observacoes">Observações</label>{{ form.observacoes }}<div class="ajuda">Ex.: portaria, ponto de referência, preferências.</div></div>
         <div class="campo"><label>{{ form.bloqueado }} Bloquear (o bot ignora este número)</label></div>
-        <div class="campo"><label>Último endereço</label><div>{{ cliente.ultimo_endereco|default:"—" }}</div></div>
         <div><button class="btn primario" type="submit">Salvar</button></div>
       </form>
     </section>

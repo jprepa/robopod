@@ -1,0 +1,15 @@
+# Desenvolvimento no PC: código montado no container e recarregado a cada
+# alteração, banco acessível em localhost:5432.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+# No .env do PC: DEBUG=True
+services:
+  db:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  app:
+    volumes:
+      - .:/app
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             uvicorn robopod.asgi:application --host 0.0.0.0 --port 8000 --reload"

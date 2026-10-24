@@ -6,6 +6,7 @@ com base no estado atual da sessão.
 """
 
 import asyncio
+import hmac
 import json
 import logging
 import re
@@ -919,6 +920,23 @@ _HANDLERS = {
 }
 
 
+def _token_webhook_valido(request) -> bool:
+    """O webhook só aceita quem conhece o WEBHOOK_TOKEN (configurado na URL
+    do webhook na Evolution: ...?token=XYZ, ou no cabeçalho X-Webhook-Token).
+    Sem token configurado, só aceita com DEBUG ligado."""
+    esperado = settings.WEBHOOK_TOKEN
+    if not esperado:
+        if settings.DEBUG:
+            return True
+        logger.error('WEBHOOK_TOKEN não definido no .env: webhook recusado')
+        return False
+    recebido = request.GET.get('token') or request.headers.get('X-Webhook-Token') or ''
+    if hmac.compare_digest(recebido.encode(), esperado.encode()):
+        return True
+    logger.warning('Webhook com token inválido recusado (IP %s)', request.META.get('REMOTE_ADDR'))
+    return False
+
+
 @csrf_exempt
 @require_POST
 async def evolution_webhook(request) -> JsonResponse:
@@ -927,6 +945,9 @@ async def evolution_webhook(request) -> JsonResponse:
     Recebe POST com o payload da mensagem, identifica o estado
     da sessão e roteia para o handler apropriado.
     """
+    if not _token_webhook_valido(request):
+        return JsonResponse({'error': 'não autorizado'}, status=403)
+
     try:
         body = json.loads(request.body)
     except json.JSONDecodeError:

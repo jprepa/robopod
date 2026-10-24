@@ -160,7 +160,7 @@
         <dt>Nome</dt><dd>{{ cliente.nome|default:"—" }}</dd>
         <dt>WhatsApp</dt><dd>{{ cliente.nome_whatsapp|default:"—" }}</dd>
         <dt>Número</dt><dd>{{ cliente.telefone|telefone }}</dd>
-        <dt>Endereço</dt><dd>{{ cliente.ultimo_endereco|default:"—" }}</dd>
+        <dt>Endereço</dt><dd>{{ pedidos_abertos.0.endereco|default:"—" }}</dd>
         {% if cliente.observacoes %}<dt>Obs.</dt><dd>{{ cliente.observacoes|linebreaksbr }}</dd>{% endif %}
       </dl>
       <div style="margin-top:12px"><a class="btn peq" href="{% url 'painel:cliente' cliente.pk %}">Ver ficha do cliente</a></div>

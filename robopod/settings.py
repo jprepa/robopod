@@ -1,16 +1,53 @@
 import os
 from pathlib import Path
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'insecure-dev-key-change-me')
-DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
-# Ex.: https://painel.seudominio.com.br (necessário para login via HTTPS/domínio)
+# Desligado por padrão: ligue (DEBUG=True) só no PC de desenvolvimento. A tela
+# de erro do modo debug mostra variáveis, configurações e dados dos clientes.
+DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', '')
+if not SECRET_KEY:
+    if not DEBUG:
+        raise ImproperlyConfigured('Defina DJANGO_SECRET_KEY no .env (veja o GUIA_DEPLOY_VPS.md)')
+    SECRET_KEY = 'insecure-dev-key-so-para-desenvolvimento'
+# "app" é o nome do serviço no docker-compose: a Evolution chama o webhook por ele
+ALLOWED_HOSTS = [h.strip() for h in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,app').split(',') if h.strip()]
+# Ex.: https://robopod.seu-tailnet.ts.net (necessário para login via HTTPS/domínio)
 CSRF_TRUSTED_ORIGINS = [o for o in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if o]
+
+# Painel acessado por HTTPS (Tailscale Serve ou Nginx): cookies só trafegam
+# criptografados. O Django recebe HTTP do proxy, então confia no cabeçalho dele.
+PAINEL_HTTPS = os.getenv('PAINEL_HTTPS', 'False').lower() in ('true', '1', 'yes')
+SESSION_COOKIE_SECURE = CSRF_COOKIE_SECURE = PAINEL_HTTPS
+if PAINEL_HTTPS:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    # Sem redirecionar HTTP -> HTTPS: o webhook da Evolution chega por HTTP na rede do Docker
+    SECURE_HSTS_SECONDS = 30 * 24 * 60 * 60
+SESSION_COOKIE_HTTPONLY = True
+# Login dura um turno: depois de 12 h é preciso entrar de novo
+SESSION_COOKIE_AGE = 12 * 60 * 60
+X_FRAME_OPTIONS = 'DENY'
+
+# Token que a Evolution manda na URL do webhook (?token=...); sem ele o webhook
+# recusa tudo (exceto com DEBUG ligado). Gere com: python -c "import secrets; print(secrets.token_urlsafe(32))"
+WEBHOOK_TOKEN = os.getenv('WEBHOOK_TOKEN', '')
+
+# Login do painel/admin: bloqueia por 15 min depois de 5 senhas erradas
+# seguidas para o mesmo usuário ou IP
+LOGIN_TENTATIVAS_MAXIMAS = int(os.getenv('LOGIN_TENTATIVAS_MAXIMAS', '5'))
+LOGIN_BLOQUEIO_MINUTOS = int(os.getenv('LOGIN_BLOQUEIO_MINUTOS', '15'))
+AUTHENTICATION_BACKENDS = ['painel.autenticacao.BackendComLimiteDeTentativas']
+
+# ── Retenção de dados dos clientes (python manage.py limpar_dados, todo dia) ──
+# Endereço dos pedidos entregues/cancelados e o comprovante que tiver sobrado
+RETENCAO_ENDERECO_DIAS = int(os.getenv('RETENCAO_ENDERECO_DIAS', '3'))
+# Histórico das conversas (painel, contexto da IA e mensagens guardadas pela Evolution)
+RETENCAO_MENSAGENS_DIAS = int(os.getenv('RETENCAO_MENSAGENS_DIAS', '3'))
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -27,6 +64,8 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    # Formulários e htmx do painel já mandam o token; o webhook é @csrf_exempt
+    'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -57,7 +96,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': os.getenv('POSTGRES_DB', 'robopod'),
         'USER': os.getenv('POSTGRES_USER', 'robopod'),
-        'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'robopod_secret'),
+        'PASSWORD': os.getenv('POSTGRES_PASSWORD', ''),
         'HOST': os.getenv('POSTGRES_HOST', 'db'),
         'PORT': os.getenv('POSTGRES_PORT', '5432'),
     }
@@ -71,8 +110,8 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# Arquivos enviados pelo painel (ex.: PDF do cardápio). Com o volume `.:/app`
-# do docker-compose, ficam na pasta do projeto na VPS e sobrevivem a rebuilds.
+# Arquivos enviados pelo painel (PDF do cardápio) e comprovantes. O volume
+# `./media` do docker-compose deixa a pasta na VPS e ela sobrevive a rebuilds.
 MEDIA_URL = 'media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 

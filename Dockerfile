@@ -20,8 +20,8 @@ RUN playwright install-deps chromium
 COPY . .
 
 # Coleta arquivos estáticos (admin)
-RUN python manage.py collectstatic --noinput 2>/dev/null || true
+RUN DJANGO_SECRET_KEY=so-para-o-build python manage.py collectstatic --noinput 2>/dev/null || true
 
 EXPOSE 8000
 
-CMD ["uvicorn", "robopod.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "robopod.asgi:application", "--host", "0.0.0.0", "--port", "8000"]

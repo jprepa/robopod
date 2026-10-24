@@ -1,0 +1,14 @@
+# Fora da imagem: segredos, dados dos clientes e arquivos do PC
+.env
+.env.*
+!.env.example
+media/
+.git/
+.claude/
+__pycache__/
+*.py[cod]
+*.log
+.venv/
+venv/
+staticfiles/
+db.sqlite3

@@ -23,7 +23,7 @@ button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding
 <form method="post">
   {% csrf_token %}
   <div><h1>Robopod</h1><p>Painel da loja</p></div>
-  {% if form.errors %}<div class="erro">Usuário ou senha incorretos.</div>{% endif %}
+  {% if form.errors %}<div class="erro">{% if form.bloqueado %}{{ form.non_field_errors.0 }}{% else %}Usuário ou senha incorretos.{% endif %}</div>{% endif %}
   <label>Usuário <input type="text" name="username" autofocus autocomplete="username" required></label>
   <label>Senha <input type="password" name="password" autocomplete="current-password" required></label>
   <input type="hidden" name="next" value="{{ next }}">
