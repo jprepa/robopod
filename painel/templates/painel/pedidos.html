@@ -9,6 +9,7 @@
 <form class="filtros" method="get">
   <input type="search" name="q" value="{{ busca }}" placeholder="Nº do pedido, nome ou número">
   {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+  {% if loja %}<input type="hidden" name="loja" value="{{ loja }}">{% endif %}
   <div class="chips">
     <a class="chip {% if not status %}ativo{% endif %}" href="{% url_com status='' pagina='' %}">Todos</a>
     <a class="chip {% if status == 'abertos' %}ativo{% endif %}" href="{% url_com status='abertos' pagina='' %}">Em andamento</a>
@@ -16,6 +17,14 @@
       <a class="chip {% if status == valor %}ativo{% endif %}" href="{% url_com status=valor pagina='' %}">{{ rotulo }}{% if n %} · {{ n }}{% endif %}</a>
     {% endfor %}
   </div>
+  {% if lojas_ativas|length > 1 %}
+  <div class="chips">
+    <a class="chip {% if not loja %}ativo{% endif %}" href="{% url_com loja='' pagina='' %}">Todas as lojas</a>
+    {% for l in lojas_ativas %}
+      <a class="chip {% if loja == l.pk|stringformat:'d' %}ativo{% endif %}" href="{% url_com loja=l.pk pagina='' %}">{{ l.nome }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
 </form>
 <div class="cartao tabela-wrap" style="padding:0">
   <table>
@@ -28,6 +37,7 @@
         <td>
           {% if p.cliente %}<a href="{% url 'painel:cliente' p.cliente.pk %}">{{ p.cliente.nome_exibicao }}</a>{% else %}<span class="muted">Balcão</span>{% endif %}
           {% if p.origem == 'manual' %}<span class="tag manual" title="Lançada à mão no painel">manual</span>{% endif %}
+          {% if lojas_ativas|length > 1 and p.loja %}<span class="tag" title="Número por onde o pedido foi feito">{{ p.loja.nome }}</span>{% endif %}
         </td>
         <td class="muted">{% for i in p.itens.all %}{{ i.quantidade }}× {{ i.nome }}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
         <td class="num">{{ p.total|brl }}</td>

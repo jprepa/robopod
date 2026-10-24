@@ -39,6 +39,7 @@ urlpatterns = [
     path('estoque/categorias/', views.categorias, name='categorias'),
 
     path('configuracoes/', views.configuracoes, name='configuracoes'),
+    path('configuracoes/lojas/', views.lojas, name='lojas'),
     path('configuracoes/cardapio.pdf', views.cardapio_pdf, name='cardapio_pdf'),
     path('configuracoes/respostas-rapidas/', views.respostas_rapidas, name='respostas_rapidas'),
 

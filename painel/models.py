@@ -10,14 +10,48 @@ from django.utils import timezone
 from django.utils.text import slugify
 
 
+class Loja(models.Model):
+    """Número de WhatsApp da operação (uma instância da Evolution). As lojas
+    dividem cardápio, estoque, equipe e configurações: muda só o número por
+    onde o cliente fala."""
+
+    nome = models.CharField(max_length=60)
+    instancia = models.CharField(
+        max_length=60, unique=True,
+        help_text='Nome da instância na Evolution (letras, números, - e _)',
+    )
+    principal = models.BooleanField(
+        default=False,
+        help_text='Número que manda os avisos ao grupo da equipe (precisa participar do grupo)',
+    )
+    ativa = models.BooleanField(
+        default=True, help_text='Desativada: o bot ignora as mensagens que chegam por este número',
+    )
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-principal', 'pk']
+
+    def __str__(self):
+        return self.nome
+
+
 class Cliente(models.Model):
-    """Cliente identificado pelo número do WhatsApp."""
+    """Cliente identificado pelo número do WhatsApp, o mesmo em todas as lojas."""
 
     telefone = models.CharField(max_length=20, unique=True, help_text='Formato 55XXXXXXXXXXX')
     nome = models.CharField(max_length=120, blank=True)
     nome_whatsapp = models.CharField(max_length=120, blank=True, help_text='Nome do perfil no WhatsApp')
     observacoes = models.TextField(blank=True)
     bloqueado = models.BooleanField(default=False, help_text='O bot ignora mensagens deste número')
+    loja_origem = models.ForeignKey(
+        Loja, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+        help_text='Número que o cliente chamou na primeira vez',
+    )
+    loja_atual = models.ForeignKey(
+        Loja, on_delete=models.SET_NULL, null=True, blank=True, related_name='clientes',
+        help_text='Número da última mensagem do cliente: bot e atendentes respondem por ele',
+    )
     conversa_lida_em = models.DateTimeField(null=True, blank=True)
     ultima_mensagem_em = models.DateTimeField(null=True, blank=True, db_index=True)
     criado_em = models.DateTimeField(auto_now_add=True)
@@ -144,6 +178,10 @@ class Pedido(models.Model):
         help_text='Vazio em vendas manuais sem cliente identificado (balcão)',
     )
     origem = models.CharField(max_length=10, choices=Origem.choices, default=Origem.WHATSAPP)
+    loja = models.ForeignKey(
+        Loja, on_delete=models.SET_NULL, null=True, blank=True, related_name='pedidos',
+        help_text='Número por onde o pedido foi feito (vazio em vendas manuais)',
+    )
     status = models.CharField(
         max_length=30, choices=Status.choices, default=Status.AGUARDANDO_PAGAMENTO, db_index=True,
     )
@@ -265,6 +303,10 @@ class Mensagem(models.Model):
         ATENDENTE = 'atendente', 'Atendente'
 
     telefone = models.CharField(max_length=20, db_index=True)
+    loja = models.ForeignKey(
+        Loja, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+        help_text='Número por onde a mensagem entrou ou saiu',
+    )
     autor = models.CharField(max_length=10, choices=Autor.choices)
     texto = models.TextField()
     enviada = models.BooleanField(default=True, help_text='Falso se o envio pela Evolution falhou')

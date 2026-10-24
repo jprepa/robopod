@@ -1,0 +1,75 @@
+{% extends 'painel/base.html' %}
+{% block titulo %}Lojas{% endblock %}
+{% block conteudo %}
+<div class="topo">
+  <h1>Lojas (números do WhatsApp)</h1>
+  <a class="btn" href="{% url 'painel:configuracoes' %}">‹ Configurações</a>
+</div>
+<p class="muted" style="margin-top:0">
+  Cada loja é um número de WhatsApp. Todas usam o mesmo cardápio, estoque, equipe e configurações.
+  O cliente é um só: o bot e os atendentes respondem pelo número que ele chamou por último.
+</p>
+<div class="grade g-3-1">
+  <section class="cartao tabela-wrap" style="padding:0">
+    <table>
+      <thead><tr><th>Loja</th><th>Instância</th><th>Conexão</th><th class="num">Clientes</th><th></th></tr></thead>
+      <tbody>
+      {% for loja in lojas %}
+        <tr>
+          <td>
+            <form method="post" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              {% csrf_token %}
+              <input type="hidden" name="acao" value="salvar">
+              <input type="hidden" name="loja" value="{{ loja.pk }}">
+              <input type="text" name="nome" value="{{ loja.nome }}" maxlength="60" style="max-width:160px" aria-label="Nome da loja">
+              <label class="peq" title="{% if loja.principal %}A principal fica sempre ativa{% else %}Desativada: o bot ignora as mensagens deste número{% endif %}"><input type="checkbox" name="ativa" value="1" {% if loja.ativa %}checked{% endif %} {% if loja.principal %}disabled{% endif %}> Ativa</label>
+              <button class="btn peq" type="submit">Salvar</button>
+            </form>
+            {% if loja.principal %}<span class="tag manual" title="Manda os avisos ao grupo da equipe">principal</span>{% endif %}
+          </td>
+          <td><code>{{ loja.instancia }}</code></td>
+          <td><span class="tag {{ loja.estado_classe }}">{{ loja.estado }}</span></td>
+          <td class="num">{{ loja.num_clientes }}</td>
+          <td class="num" style="white-space:nowrap">
+            {% if loja.estado_classe != 'pago' %}<a class="btn peq" href="?qr={{ loja.pk }}">Conectar (QR Code)</a>{% endif %}
+            {% if not loja.principal %}
+            <form method="post" style="display:inline">
+              {% csrf_token %}
+              <input type="hidden" name="acao" value="principal">
+              <input type="hidden" name="loja" value="{{ loja.pk }}">
+              <button class="btn peq" type="submit" title="Passa a mandar os avisos ao grupo da equipe">Tornar principal</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="muted">Nenhuma loja cadastrada.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <section class="cartao">
+    <h2>Adicionar número</h2>
+    <form method="post" class="grade" style="gap:12px">
+      {% csrf_token %}
+      <input type="hidden" name="acao" value="criar">
+      <div class="campo"><label for="nome">Nome no painel</label><input type="text" id="nome" name="nome" maxlength="60" placeholder="Loja 2" required></div>
+      <div class="campo"><label for="instancia">Instância</label><input type="text" id="instancia" name="instancia" maxlength="60" pattern="[A-Za-z0-9_-]+" placeholder="loja2" required>
+        <div class="ajuda">Letras, números, - e _. Não dá para trocar depois.</div></div>
+      <div><button class="btn primario" type="submit">Criar e mostrar o QR Code</button></div>
+    </form>
+  </section>
+  {% if qr %}
+  <section class="cartao" id="qr" style="grid-column: 1 / -1">
+    <h2>Conectar {{ qr.loja.nome }}</h2>
+    {% if qr.imagem %}
+      <p class="muted" style="margin-top:0">No celular desse número: WhatsApp → <b>Aparelhos conectados</b> → <b>Conectar um aparelho</b> e aponte para o código. Ele expira em cerca de 1 minuto: se não der tempo, recarregue a página.</p>
+      <img src="{{ qr.imagem }}" alt="QR Code para conectar {{ qr.loja.nome }}" width="260" height="260" style="background:#fff;padding:8px;border-radius:8px">
+    {% else %}
+      <p style="color:var(--bad)">A Evolution não devolveu o QR Code. Se o número já está conectado, não precisa de QR. Senão, confira se a Evolution está no ar e recarregue.</p>
+    {% endif %}
+    <p><a class="btn" href="{% url 'painel:lojas' %}">Pronto, conferir conexão</a></p>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

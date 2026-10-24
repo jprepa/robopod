@@ -119,6 +119,27 @@ EVOLUTION_API_KEY=sua-chave-aqui
 EVOLUTION_INSTANCE=robopod
 ```
 
+### 3.3.1. Vários números (lojas)
+
+A operação pode ter vários números de WhatsApp, cada um uma instância da Evolution, todos
+ligados ao mesmo painel, cardápio, estoque, equipe e configurações. Cadastre em
+**Configurações → Lojas** (só administradores): o painel cria a instância na Evolution e
+mostra o QR Code para conectar o número.
+
+- O webhook é **global** (`WEBHOOK_GLOBAL_*` no `docker-compose.yml`): toda mensagem chega
+  com o nome da instância, e o app descobre por qual loja ela entrou. Instância não
+  cadastrada ou loja desativada: a mensagem é ignorada.
+- O cliente é um só (identificado pelo número dele). `Cliente.loja_origem` guarda o número
+  que ele chamou na primeira vez e `Cliente.loja_atual` o da última mensagem: o bot e os
+  atendentes respondem por ele (`painel/lojas.py`).
+- Cada pedido e cada mensagem guardam a loja. Com mais de uma loja ativa, Conversas e
+  Pedidos ganham o filtro por loja e a etiqueta com o nome dela, e os avisos ao grupo
+  dizem por qual número o cliente chamou.
+- Os avisos ao grupo e a lista de grupos usam a loja **principal**, que precisa
+  participar do grupo.
+- A mesma mensagem entregue duas vezes pela Evolution é tratada uma vez só (id da
+  mensagem guardado por 10 minutos).
+
 ### 3.4. Grupo de avisos no WhatsApp
 
 O bot avisa a equipe num grupo do WhatsApp: cliente pediu atendente, pedido novo,
@@ -201,7 +222,7 @@ CHAVE_PIX=seu-email@pix.com
 | `OPENAI_TRANSCRICAO_MODEL` | Não    | Transcrição de áudios (padrão: `gpt-4o-mini-transcribe`) |
 | `EVOLUTION_API_URL`   | Sim         | URL base da Evolution API                       |
 | `EVOLUTION_API_KEY`   | Sim         | Chave de autenticação da Evolution API          |
-| `EVOLUTION_INSTANCE`  | Sim         | Nome da instância do WhatsApp                   |
+| `EVOLUTION_INSTANCE`  | Sim         | Instância do primeiro número (vira a Loja 1 na migração; as demais são cadastradas no painel) |
 | `EVOLUTION_VERSION`   | Não         | Versão fixa da imagem da Evolution (padrão: `latest`) |
 | `ENDERECO_LOJA`       | Sim         | Endereço completo da loja (origem do frete)     |
 | `FRETE_MODO`          | Não         | `estimativa` (padrão) ou `uber_scraper`         |

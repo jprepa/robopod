@@ -160,6 +160,7 @@
         <dt>Nome</dt><dd>{{ cliente.nome|default:"—" }}</dd>
         <dt>WhatsApp</dt><dd>{{ cliente.nome_whatsapp|default:"—" }}</dd>
         <dt>Número</dt><dd>{{ cliente.telefone|telefone }}</dd>
+        {% if lojas_ativas|length > 1 and cliente.loja_atual %}<dt>Loja</dt><dd title="As respostas saem por este número">{{ cliente.loja_atual.nome }}{% if cliente.loja_origem and cliente.loja_origem != cliente.loja_atual %} <span class="muted">(chegou pela {{ cliente.loja_origem.nome }})</span>{% endif %}</dd>{% endif %}
         <dt>Endereço</dt><dd>{{ pedidos_abertos.0.endereco|default:"—" }}</dd>
         {% if cliente.observacoes %}<dt>Obs.</dt><dd>{{ cliente.observacoes|linebreaksbr }}</dd>{% endif %}
       </dl>

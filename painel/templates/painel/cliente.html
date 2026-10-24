@@ -45,6 +45,7 @@
       <form method="post" class="grade" style="gap:12px">
         {% csrf_token %}
         <div class="campo"><label for="id_nome">Nome</label>{{ form.nome }}<div class="ajuda">WhatsApp: {{ cliente.nome_whatsapp|default:"—" }}</div></div>
+        {% if lojas_ativas|length > 1 and cliente.loja_origem %}<div class="campo"><label>Loja</label><div>Chegou pela {{ cliente.loja_origem.nome }}{% if cliente.loja_atual and cliente.loja_atual != cliente.loja_origem %} · fala hoje pela {{ cliente.loja_atual.nome }}{% endif %}</div></div>{% endif %}
         <div class="campo"><label for="id_observacoes">Observações</label>{{ form.observacoes }}<div class="ajuda">Ex.: portaria, ponto de referência, preferências.</div></div>
         <div class="campo"><label>{{ form.bloqueado }} Bloquear (o bot ignora este número)</label></div>
         <div><button class="btn primario" type="submit">Salvar</button></div>

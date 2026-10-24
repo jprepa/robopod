@@ -3,7 +3,7 @@
 {% block titulo %}Pedido #{{ pedido.pk }}{% endblock %}
 {% block conteudo %}
 <div class="topo">
-  <h1>Pedido #{{ pedido.pk }} <span class="tag {{ pedido.status }}" style="vertical-align:middle">{{ pedido.get_status_display }}</span>{% if pedido.origem == 'manual' %} <span class="tag manual" style="vertical-align:middle">venda manual</span>{% endif %}</h1>
+  <h1>Pedido #{{ pedido.pk }} <span class="tag {{ pedido.status }}" style="vertical-align:middle">{{ pedido.get_status_display }}</span>{% if pedido.origem == 'manual' %} <span class="tag manual" style="vertical-align:middle">venda manual</span>{% endif %}{% if lojas_ativas|length > 1 and pedido.loja %} <span class="tag" style="vertical-align:middle" title="Número por onde o pedido foi feito">{{ pedido.loja.nome }}</span>{% endif %}</h1>
   <a class="btn" href="{% url 'painel:pedidos' %}">← Pedidos</a>
 </div>
 <div class="grade g-3-1">

@@ -120,25 +120,20 @@ Confirme que as portas agora escutam só dentro da VPS (deve aparecer `127.0.0.1
 ss -tlnp | grep -E ':8000|:8083|:5432'
 ```
 
-### Passo S6 — Webhook com o token
+### Passo S6 — Webhook único para todos os números
 
-A chave da Evolution mudou, então use a nova (`VALOR_3`) e o token (`VALOR_4`):
+O webhook agora é **global**: o `docker-compose.yml` configura a Evolution para mandar as
+mensagens de **todos** os números ao app, já com o `WEBHOOK_TOKEN`. Não precisa configurar
+webhook por instância.
 
-```bash
-curl -X POST "http://localhost:8083/webhook/set/robopod" \
-  -H "Content-Type: application/json" \
-  -H "apikey: VALOR_3" \
-  -d '{
-    "url": "http://app:8000/webhook/evolution/?token=VALOR_4",
-    "webhook_by_events": false,
-    "webhook_base64": false,
-    "events": ["MESSAGES_UPSERT"]
-  }'
-```
+O webhook antigo da instância `robopod` (sem token) continua cadastrado e passa a ser
+recusado (`Webhook com token inválido recusado` no log). Desligue-o para limpar o log:
+faça antes o Passo S7, abra o manager da Evolution
+(`https://robopod.SEU-TAILNET.ts.net:8443/manager`, login com a `EVOLUTION_API_KEY` nova),
+entre na instância **robopod** → **Webhook** → desligue **Enabled** → **Save**.
 
-Mande um "oi" de outro celular para o número da loja e veja a resposta chegar. Se o log
-(`docker compose logs -f app`) mostrar `Webhook com token inválido recusado`, o token da
-URL não bate com o `WEBHOOK_TOKEN` do `.env`.
+Mande um "oi" de outro celular para o número da loja e veja a resposta chegar
+(`docker compose logs -f app`).
 
 ### Passo S7 — Painel pelo Tailscale (https)
 
@@ -199,6 +194,23 @@ rm -f /etc/nginx/sites-enabled/robopod && nginx -t && systemctl reload nginx
   `docker compose exec app python manage.py limpar_dados --simular`
 - No grupo de avisos do WhatsApp: **Dados do grupo → Mensagens temporárias → 24 horas**
   (os avisos trazem o endereço do cliente).
+
+### Passo S10 — Os outros números (lojas)
+
+A migração cadastra o número que já estava em uso como **Loja 1** (principal). Para os
+outros, entre no painel com um usuário **administrador** (superusuário):
+
+1. **Configurações → Lojas → Adicionar número**: dê um nome (ex.: Loja 2) e uma instância
+   (ex.: `loja2`) e clique em **Criar e mostrar o QR Code**.
+2. No celular desse número: WhatsApp → **Aparelhos conectados → Conectar um aparelho** e
+   aponte para o QR Code. Recarregue a página até a conexão ficar **Conectado**.
+3. Repita para o terceiro número.
+4. Os avisos ao grupo saem pela loja **principal**: ela precisa participar do grupo da
+   equipe. Para trocar, use **Tornar principal**.
+
+Cardápio, estoque, equipe, horário, PIX e grupo de avisos são os mesmos para todos os
+números. O cliente é um só: o painel mostra por qual número ele chegou e o bot e os
+atendentes respondem pelo número que ele usou por último.
 
 ### Se algo der errado
 

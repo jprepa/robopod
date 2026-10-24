@@ -49,6 +49,12 @@ services:
       DATABASE_SAVE_MESSAGE_UPDATE: "true"
       DATABASE_SAVE_DATA_CONTACTS: "true"
       DATABASE_SAVE_DATA_CHATS: "true"
+      # Webhook único para todos os números (lojas): cada mensagem chega ao app
+      # com o nome da instância. Não precisa configurar webhook por instância.
+      WEBHOOK_GLOBAL_ENABLED: "true"
+      WEBHOOK_GLOBAL_URL: http://app:8000/webhook/evolution/?token=${WEBHOOK_TOKEN:?defina WEBHOOK_TOKEN no .env}
+      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
+      WEBHOOK_EVENTS_MESSAGES_UPSERT: "true"
       CACHE_REDIS_ENABLED: "true"
       CACHE_REDIS_URI: redis://redis:6379
     volumes:

@@ -14,6 +14,7 @@ from datetime import timedelta
 
 from asgiref.sync import sync_to_async
 from django.conf import settings
+from django.core.cache import cache
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -30,7 +31,7 @@ from .notificacoes import (
     enviar_whatsapp, notificar_equipe, baixar_midia,
     enviar_lista_whatsapp, enviar_imagem_whatsapp, enviar_documento_whatsapp,
 )
-from painel import catalogo, servicos
+from painel import catalogo, lojas, servicos
 from painel.models import Configuracao
 
 from . import frete
@@ -862,7 +863,9 @@ async def _loja_fechada_respondeu(telefone: str) -> bool:
     return True
 
 
-async def _bot_pausado_tratou(telefone: str, texto: str, tipo_interacao: str, data: dict) -> bool:
+async def _bot_pausado_tratou(
+    telefone: str, texto: str, tipo_interacao: str, data: dict, instancia: str,
+) -> bool:
     """Bot pausado no painel: nenhuma resposta automática, nem a de loja fechada.
 
     A mensagem já ficou registrada para o atendente responder pelo painel.
@@ -875,36 +878,36 @@ async def _bot_pausado_tratou(telefone: str, texto: str, tipo_interacao: str, da
     if tipo_interacao == 'midia':
         sessao = await SessaoChat.objects.filter(telefone=telefone).afirst()
         if sessao is not None and sessao.estado_atual == SessaoChat.Estado.AGUARDANDO_COMPROVANTE:
-            await _guardar_comprovante(telefone, data)
+            await _guardar_comprovante(telefone, data, instancia)
             await _handler_aguardando_comprovante(sessao, texto)
     return True
 
 
-async def _guardar_comprovante(telefone: str, data: dict) -> None:
+async def _guardar_comprovante(telefone: str, data: dict, instancia: str) -> None:
     """Salva a imagem/PDF enviada na etapa do comprovante no pedido, para o
     operador conferir no painel. Falhas não impedem o fluxo do pedido."""
     sessao = await SessaoChat.objects.filter(telefone=telefone).afirst()
     if sessao is None or sessao.estado_atual != SessaoChat.Estado.AGUARDANDO_COMPROVANTE:
         return
     try:
-        midia = await baixar_midia(data)
+        midia = await baixar_midia(data, instancia)
         if midia is not None:
             await servicos.salvar_comprovante(sessao.carrinho_temporario.get('pedido_id'), *midia)
     except Exception:
         logger.exception('Falha ao guardar o comprovante de %s', telefone)
 
 
-async def _transcrever_audio(data: dict) -> str:
+async def _transcrever_audio(data: dict, instancia: str) -> str:
     """Baixa a nota de voz e devolve o texto falado ('' se não conseguir)."""
-    midia = await baixar_midia(data)
+    midia = await baixar_midia(data, instancia)
     if midia is None:
         return ''
     return await transcrever_audio(*midia)
 
 
-async def _descrever_imagem(data: dict) -> str:
+async def _descrever_imagem(data: dict, instancia: str) -> str:
     """Baixa a foto do cliente e devolve o que há nela ('' se não conseguir)."""
-    midia = await baixar_midia(data)
+    midia = await baixar_midia(data, instancia)
     if midia is None:
         return ''
     return await descrever_imagem(*midia)
@@ -964,17 +967,30 @@ async def evolution_webhook(request) -> JsonResponse:
 
     telefone, texto, tipo_interacao = dados
 
+    # Loja (número) por onde a mensagem chegou: as respostas saem por ela
+    nome_instancia = str(body.get('instance') or '')
+    loja = await lojas.da_instancia(nome_instancia)
+    if loja is None or not loja.ativa:
+        logger.warning('Mensagem pela instância "%s" (não cadastrada ou desativada) ignorada', nome_instancia)
+        return JsonResponse({'status': 'loja desconhecida'})
+    instancia = loja.instancia
+
+    # A mesma mensagem entregue duas vezes (nova tentativa da Evolution) é tratada uma vez só
+    id_mensagem = ((body.get('data') or {}).get('key') or {}).get('id')
+    if id_mensagem and not await cache.aadd(f'webhook-msg:{instancia}:{id_mensagem}', 1, timeout=600):
+        return JsonResponse({'status': 'mensagem repetida'})
+
     # Áudio: transcreve e segue como se o cliente tivesse escrito
     texto_painel = texto
     if tipo_interacao == 'audio':
-        texto = await _transcrever_audio(body.get('data', body))
+        texto = await _transcrever_audio(body.get('data', body), instancia)
         texto_painel = f'🎤 Áudio: {texto}' if texto else '🎤 Áudio (não foi possível transcrever)'
     logger.info('📩 Mensagem de %s [%s]: %s', telefone, tipo_interacao, texto_painel[:100])
 
     # Histórico e cadastro do cliente para o painel
     nome_whatsapp = (body.get('data') or {}).get('pushName') or ''
     try:
-        cliente = await servicos.registrar_mensagem_cliente(telefone, texto_painel, nome_whatsapp)
+        cliente = await servicos.registrar_mensagem_cliente(telefone, texto_painel, nome_whatsapp, loja.pk)
     except Exception:
         logger.exception('Falha ao registrar mensagem de %s', telefone)
         cliente = None
@@ -982,7 +998,7 @@ async def evolution_webhook(request) -> JsonResponse:
         logger.info('Cliente %s bloqueado, mensagem ignorada', telefone)
         return JsonResponse({'status': 'cliente bloqueado'})
 
-    if await _bot_pausado_tratou(telefone, texto, tipo_interacao, body.get('data', body)):
+    if await _bot_pausado_tratou(telefone, texto, tipo_interacao, body.get('data', body), instancia):
         return JsonResponse({'status': 'bot pausado'})
 
     if await _loja_fechada_respondeu(telefone):
@@ -1006,7 +1022,7 @@ async def evolution_webhook(request) -> JsonResponse:
 
     # Foto no atendimento: a IA descreve e segue como se o cliente tivesse escrito
     if tipo_interacao == 'midia' and em_atendimento_llm and texto.startswith('[imagem]'):
-        descricao = await _descrever_imagem(body.get('data', body))
+        descricao = await _descrever_imagem(body.get('data', body), instancia)
         if descricao:
             legenda = texto.removeprefix('[imagem]').strip()
             texto = f'[Cliente enviou uma foto: {descricao}] {legenda}'.strip()
@@ -1034,7 +1050,7 @@ async def evolution_webhook(request) -> JsonResponse:
 
     # Comprovante: guarda a imagem/PDF no pedido antes de o handler marcá-lo como recebido
     if tipo_interacao == 'midia' and sessao.estado_atual == SessaoChat.Estado.AGUARDANDO_COMPROVANTE:
-        await _guardar_comprovante(telefone, body.get('data', body))
+        await _guardar_comprovante(telefone, body.get('data', body), instancia)
 
     # Fora do atendimento LLM, botões viram palavras-chave (ex.: cancelar)
     if tipo_interacao in ('botao', 'lista'):

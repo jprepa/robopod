@@ -20,27 +20,39 @@ logger = logging.getLogger(__name__)
 # ── Clientes e mensagens ──
 
 
-async def registrar_mensagem_cliente(telefone: str, texto: str, nome_whatsapp: str = '') -> Cliente:
-    """Salva a mensagem recebida e cria/atualiza o cliente."""
+async def registrar_mensagem_cliente(
+    telefone: str, texto: str, nome_whatsapp: str = '', loja_id: int | None = None,
+) -> Cliente:
+    """Salva a mensagem recebida e cria/atualiza o cliente. A loja por onde a
+    mensagem chegou vira a loja atual do cliente (as respostas saem por ela)."""
     agora = timezone.now()
     cliente, criado = await Cliente.objects.aget_or_create(
-        telefone=telefone, defaults={'nome_whatsapp': nome_whatsapp[:120]},
+        telefone=telefone,
+        defaults={'nome_whatsapp': nome_whatsapp[:120], 'loja_origem_id': loja_id, 'loja_atual_id': loja_id},
     )
     campos = {'ultima_mensagem_em': agora}
     if nome_whatsapp and not criado and cliente.nome_whatsapp != nome_whatsapp:
         campos['nome_whatsapp'] = nome_whatsapp[:120]
+    if loja_id:
+        campos['loja_atual_id'] = cliente.loja_atual_id = loja_id
+        if cliente.loja_origem_id is None:
+            campos['loja_origem_id'] = cliente.loja_origem_id = loja_id
     await Cliente.objects.filter(pk=cliente.pk).aupdate(**campos)
     await Mensagem.objects.acreate(
-        telefone=telefone, autor=Mensagem.Autor.CLIENTE, texto=texto, criado_em=agora,
+        telefone=telefone, loja_id=loja_id, autor=Mensagem.Autor.CLIENTE, texto=texto, criado_em=agora,
     )
     return cliente
 
 
-async def registrar_mensagem_enviada(telefone: str, texto: str, autor: str, enviada: bool) -> None:
+async def registrar_mensagem_enviada(
+    telefone: str, texto: str, autor: str, enviada: bool, loja_id: int | None = None,
+) -> None:
     """Salva uma mensagem enviada pelo bot ou pelo atendente. Nunca levanta erro:
     falhar o histórico não pode impedir o atendimento."""
     try:
-        await Mensagem.objects.acreate(telefone=telefone, autor=autor, texto=texto, enviada=enviada)
+        await Mensagem.objects.acreate(
+            telefone=telefone, loja_id=loja_id, autor=autor, texto=texto, enviada=enviada,
+        )
     except Exception:
         logger.exception('Falha ao registrar mensagem enviada para %s', telefone)
 
@@ -99,6 +111,7 @@ def _criar_pedido(telefone: str, carrinho: dict, frete: dict) -> Pedido:
         distancia = frete.get('distancia_km')
         pedido = Pedido.objects.create(
             cliente=cliente,
+            loja_id=cliente.loja_atual_id,
             subtotal=subtotal,
             frete=valor_frete,
             total=subtotal + valor_frete,

@@ -5,6 +5,7 @@
     {% if c.estado == 'atendimento_humano' %}<span class="tag humano">aguardando atendente</span>
     {% elif c.estado and c.estado != 'atendimento_llm' %}<span class="tag">{{ estados|get_item:c.estado }}</span>{% endif %}
     {% if c.bloqueado %}<span class="tag cancelado">bloqueado</span>{% endif %}
+    {% if lojas_ativas|length > 1 and c.loja_atual %}<span class="tag" title="Número por onde o cliente falou por último">{{ c.loja_atual.nome }}</span>{% endif %}
   </div>
   <div class="quando">{{ c.ultima_mensagem_em|date:"d/m H:i" }}</div>
   <div class="previa">{% if c.ultima_autor == 'bot' %}🤖 {% elif c.ultima_autor == 'atendente' %}🧑 {% endif %}{{ c.ultima_texto|sem_formatacao|truncatechars:110 }}</div>

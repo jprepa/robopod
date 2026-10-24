@@ -27,13 +27,16 @@ from django.views.decorators.http import require_POST
 
 from core.llm_service import formatar_preco, gerar_sabores_texto
 from core.models import SessaoChat
-from core.notificacoes import enviar_whatsapp, listar_grupos_whatsapp, notificar_equipe
+from core.notificacoes import (
+    criar_instancia, enviar_whatsapp, estado_conexao, listar_grupos_whatsapp, notificar_equipe, qr_code,
+)
 
 from . import auditoria, catalogo, servicos
 from .auditoria import Tipo
 from .forms import CategoriaForm, ClienteForm, ProdutoForm, RespostaRapidaForm, VarianteFormSet
 from .models import (
-    MENSAGEM_FECHADO_PADRAO, Categoria, Cliente, Configuracao, ItemPedido, Mensagem, Pedido, Produto, RegistroAuditoria,
+    MENSAGEM_FECHADO_PADRAO, Categoria, Cliente, Configuracao, ItemPedido, Loja, Mensagem, Pedido, Produto,
+    RegistroAuditoria,
     RespostaRapida, Variante,
 )
 
@@ -548,7 +551,7 @@ def _estoque_baixo() -> list[dict]:
 # ── Conversas ──
 
 
-def _conversas_qs(filtro: str, busca: str):
+def _conversas_qs(filtro: str, busca: str, loja: str = ''):
     ultima = Mensagem.objects.filter(telefone=OuterRef('telefone')).order_by('-criado_em')
     estado = SessaoChat.objects.filter(telefone=OuterRef('telefone')).values('estado_atual')[:1]
     # Mensagens do cliente depois da última vez que a conversa foi aberta
@@ -563,6 +566,7 @@ def _conversas_qs(filtro: str, busca: str):
     )
     qs = (
         Cliente.objects.filter(ultima_mensagem_em__isnull=False)
+        .select_related('loja_atual')
         .annotate(
             ultima_texto=Subquery(ultima.values('texto')[:1]),
             ultima_autor=Subquery(ultima.values('autor')[:1]),
@@ -577,6 +581,8 @@ def _conversas_qs(filtro: str, busca: str):
         qs = qs.filter(nao_lidas__gt=0)
     elif filtro == 'pedido':
         qs = qs.filter(pedidos__status__in=_ABERTOS).distinct()
+    if loja.isdigit():
+        qs = qs.filter(loja_atual_id=loja)
     if busca:
         digitos = ''.join(c for c in busca if c.isdigit())
         cond = Q(nome__icontains=busca) | Q(nome_whatsapp__icontains=busca)
@@ -590,11 +596,13 @@ def _conversas_qs(filtro: str, busca: str):
 def conversas(request):
     filtro = request.GET.get('filtro', '')
     busca = request.GET.get('q', '').strip()
+    loja = request.GET.get('loja', '')
     contexto = {
         'secao': 'conversas',
         'filtro': filtro,
         'busca': busca,
-        'conversas': _conversas_qs(filtro, busca)[:100],
+        'loja': loja,
+        'conversas': _conversas_qs(filtro, busca, loja)[:100],
         'estados': dict(SessaoChat.Estado.choices),
     }
     if request.headers.get('HX-Request'):
@@ -880,7 +888,10 @@ _PROXIMO_STATUS = {
 def pedidos(request):
     status = request.GET.get('status', '')
     busca = request.GET.get('q', '').strip()
-    qs = Pedido.objects.select_related('cliente').prefetch_related('itens')
+    loja = request.GET.get('loja', '')
+    qs = Pedido.objects.select_related('cliente', 'loja').prefetch_related('itens')
+    if loja.isdigit():
+        qs = qs.filter(loja_id=loja)
     if status == 'abertos':
         qs = qs.exclude(status__in=(Pedido.Status.ENTREGUE, Pedido.Status.CANCELADO))
     elif status:
@@ -897,7 +908,7 @@ def pedidos(request):
         p.proximo_rotulo = Pedido.Status(p.proximo).label if p.proximo else ''
     contagem = dict(Pedido.objects.order_by().values_list('status').annotate(n=Count('id')))
     return _render(request, 'painel/pedidos.html', {
-        'secao': 'pedidos', 'pagina': pagina, 'status': status, 'busca': busca,
+        'secao': 'pedidos', 'pagina': pagina, 'status': status, 'busca': busca, 'loja': loja,
         'status_opcoes': [(v, r, contagem.get(v, 0)) for v, r in Pedido.Status.choices],
     })
 
@@ -1343,6 +1354,80 @@ def configuracoes(request):
         'grupo_na_lista': any(g['id'] == config.grupo_avisos_id for g in grupos),
         'painel_url': settings.PAINEL_URL,
     })
+
+
+# ── Lojas: os números de WhatsApp da operação (só administradores) ──
+
+_INSTANCIA_VALIDA = re.compile(r'^[A-Za-z0-9_-]{1,60}$')
+_ESTADOS_CONEXAO = {
+    'open': ('Conectado', 'pago'), 'connecting': ('Aguardando QR Code', 'aguardando_pagamento'),
+    'close': ('Desconectado', 'cancelado'), 'inexistente': ('Não existe na Evolution', 'cancelado'),
+    '': ('Evolution não respondeu', ''),
+}
+
+
+@login_required
+def lojas(request):
+    if not request.user.is_superuser:
+        raise PermissionDenied
+    if request.method == 'POST':
+        acao = request.POST.get('acao', '')
+        if acao == 'criar':
+            return _criar_loja(request)
+        loja = get_object_or_404(Loja, pk=request.POST.get('loja'))
+        if acao == 'principal':
+            Loja.objects.update(principal=False)
+            Loja.objects.filter(pk=loja.pk).update(principal=True, ativa=True)
+            auditoria.registrar(request, Tipo.CONFIGURACAO, 'loja_principal',
+                                f'Definiu {loja.nome} como número principal (avisos ao grupo)', alvo=loja)
+            messages.success(request, f'{loja.nome} agora manda os avisos ao grupo. Ela precisa participar do grupo.')
+        elif acao == 'salvar':
+            antes = {'Nome': loja.nome, 'Ativa': loja.ativa}
+            loja.nome = request.POST.get('nome', '').strip()[:60] or loja.nome
+            loja.ativa = bool(request.POST.get('ativa')) or loja.principal
+            loja.save(update_fields=['nome', 'ativa'])
+            depois = {'Nome': loja.nome, 'Ativa': loja.ativa}
+            mudancas = {
+                c: [auditoria.texto(antes[c]), auditoria.texto(depois[c])] for c in antes if antes[c] != depois[c]
+            }
+            if mudancas:
+                auditoria.registrar(request, Tipo.CONFIGURACAO, 'loja_editar', f'Alterou a loja {loja.nome}',
+                                    alvo=loja, mudancas=mudancas)
+            messages.success(request, 'Loja salva.')
+        return redirect('painel:lojas')
+
+    lista = list(Loja.objects.annotate(num_clientes=Count('clientes')).order_by('-principal', 'pk'))
+    for loja in lista:
+        estado = async_to_sync(estado_conexao)(loja.instancia)
+        loja.estado, loja.estado_classe = _ESTADOS_CONEXAO.get(estado, (estado, ''))
+    qr = None
+    if request.GET.get('qr'):
+        qr_loja = Loja.objects.filter(pk=request.GET['qr']).first()
+        if qr_loja is not None:
+            qr = {'loja': qr_loja, 'imagem': async_to_sync(qr_code)(qr_loja.instancia)}
+    return _render(request, 'painel/lojas.html', {'secao': 'configuracoes', 'lojas': lista, 'qr': qr})
+
+
+def _criar_loja(request):
+    nome = request.POST.get('nome', '').strip()[:60]
+    instancia = request.POST.get('instancia', '').strip()
+    if not nome or not _INSTANCIA_VALIDA.match(instancia):
+        messages.error(request, 'Preencha o nome e uma instância só com letras, números, - ou _ (ex.: loja2).')
+        return redirect('painel:lojas')
+    if Loja.objects.filter(instancia=instancia).exists():
+        messages.error(request, f'Já existe uma loja com a instância "{instancia}".')
+        return redirect('painel:lojas')
+    try:
+        async_to_sync(criar_instancia)(instancia)
+    except Exception as e:
+        logger.warning('Falha ao criar a instância %s na Evolution: %s', instancia, e)
+        messages.error(request, 'A Evolution não criou a instância. Confira se ela está no ar e tente de novo.')
+        return redirect('painel:lojas')
+    loja = Loja.objects.create(nome=nome, instancia=instancia, principal=not Loja.objects.exists())
+    auditoria.registrar(request, Tipo.CONFIGURACAO, 'loja_criar',
+                        f'Cadastrou a loja {loja.nome} (instância {loja.instancia})', alvo=loja)
+    messages.success(request, f'{loja.nome} cadastrada. Escaneie o QR Code com o WhatsApp desse número.')
+    return redirect(f"{request.path}?qr={loja.pk}")
 
 
 @login_required

@@ -7,7 +7,7 @@
     <h2>Avisos da equipe no WhatsApp</h2>
     <p class="muted" style="margin-top:0">
       O bot avisa num grupo do WhatsApp quando um cliente pede atendente, quando chega um
-      pedido ou comprovante e quando o frete falha. O número da loja precisa <b>participar do grupo</b>.
+      pedido ou comprovante e quando o frete falha. O número da loja precisa <b>participar do grupo</b>{% if lojas_ativas|length > 1 %} (com vários números, é o <b>principal</b>, escolhido em Lojas){% endif %}.
     </p>
     <form method="post" class="grade" style="gap:14px">
       {% csrf_token %}
@@ -63,6 +63,15 @@
       </div>
     </form>
   </section>
+  {% if user.is_superuser %}
+  <section class="cartao">
+    <h2>Lojas (números do WhatsApp)</h2>
+    <p class="muted" style="margin-top:0">
+      {{ lojas_ativas|length }} número{{ lojas_ativas|length|pluralize }} ativo{{ lojas_ativas|length|pluralize }}. Adicione números, conecte pelo QR Code e escolha qual manda os avisos ao grupo.
+    </p>
+    <a class="btn" href="{% url 'painel:lojas' %}">Gerenciar lojas</a>
+  </section>
+  {% endif %}
   <section class="cartao">
     <h2>Respostas rápidas do chat</h2>
     <p class="muted" style="margin-top:0">

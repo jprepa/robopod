@@ -1,5 +1,9 @@
 """Envio de mensagens pelo WhatsApp (Evolution API) e avisos à equipe num grupo.
 
+Cada loja é uma instância da Evolution: a mensagem ao cliente sai pelo número
+por onde ele falou por último (painel/lojas.py); avisos ao grupo e a lista de
+grupos usam a loja principal.
+
 Todas as chamadas à Evolution API usam retry automático (até 3 tentativas
 com backoff exponencial) e timeout de 30 s para evitar que o bot fique mudo
 quando a Evolution demora a responder.
@@ -12,7 +16,8 @@ import logging
 import httpx
 from django.conf import settings
 
-from painel.models import Configuracao
+from painel.lojas import instancia_principal, rota
+from painel.models import Configuracao, Loja
 from painel.servicos import registrar_mensagem_enviada
 
 logger = logging.getLogger(__name__)
@@ -77,11 +82,8 @@ def _evo_headers() -> dict:
     }
 
 
-def _evo_url(endpoint: str) -> str:
-    return (
-        f"{settings.EVOLUTION_API_URL}/message/{endpoint}/"
-        f"{settings.EVOLUTION_INSTANCE}"
-    )
+def _evo_url(endpoint: str, instancia: str) -> str:
+    return f"{settings.EVOLUTION_API_URL}/message/{endpoint}/{instancia}"
 
 
 def _delay_digitando(texto: str) -> int:
@@ -105,9 +107,10 @@ async def enviar_whatsapp(telefone: str, mensagem: str, autor: str = 'bot') -> b
     if autor == 'bot':
         # Mensagem de atendente já foi digitada por uma pessoa, não precisa
         payload['delay'] = _delay_digitando(mensagem)
+    instancia, loja_id = await rota(telefone)
     try:
         await _post_com_retry(
-            _evo_url('sendText'),
+            _evo_url('sendText', instancia),
             json=payload,
             headers=_evo_headers(),
             label=f'WhatsApp texto → {telefone}',
@@ -117,7 +120,7 @@ async def enviar_whatsapp(telefone: str, mensagem: str, autor: str = 'bot') -> b
     except Exception:
         logger.exception('Falha ao enviar WhatsApp para %s', telefone)
         enviado = False
-    await registrar_mensagem_enviada(telefone, mensagem, autor, enviado)
+    await registrar_mensagem_enviada(telefone, mensagem, autor, enviado, loja_id)
     return enviado
 
 
@@ -136,9 +139,10 @@ async def enviar_imagem_whatsapp(
     Returns:
         True se o envio foi bem-sucedido.
     """
+    instancia, loja_id = await rota(telefone)
     try:
         await _post_com_retry(
-            _evo_url('sendMedia'),
+            _evo_url('sendMedia', instancia),
             json={
                 'number': telefone,
                 'mediatype': 'image',
@@ -156,7 +160,7 @@ async def enviar_imagem_whatsapp(
         logger.exception('Falha ao enviar imagem WhatsApp para %s', telefone)
         enviado = False
     await registrar_mensagem_enviada(
-        telefone, f'[imagem] {legenda}'.strip(), 'bot', enviado,
+        telefone, f'[imagem] {legenda}'.strip(), 'bot', enviado, loja_id,
     )
     return enviado
 
@@ -175,9 +179,10 @@ async def enviar_documento_whatsapp(
     Returns:
         True se o envio foi bem-sucedido.
     """
+    instancia, loja_id = await rota(telefone)
     try:
         await _post_com_retry(
-            _evo_url('sendMedia'),
+            _evo_url('sendMedia', instancia),
             json={
                 'number': telefone,
                 'mediatype': 'document',
@@ -196,7 +201,7 @@ async def enviar_documento_whatsapp(
         logger.exception('Falha ao enviar documento WhatsApp para %s', telefone)
         enviado = False
     await registrar_mensagem_enviada(
-        telefone, f'[documento] {nome_arquivo} {legenda}'.strip(), 'bot', enviado,
+        telefone, f'[documento] {nome_arquivo} {legenda}'.strip(), 'bot', enviado, loja_id,
     )
     return enviado
 
@@ -222,9 +227,10 @@ async def enviar_lista_whatsapp(
     Returns:
         True se o envio foi bem-sucedido.
     """
+    instancia, loja_id = await rota(telefone)
     try:
         await _post_com_retry(
-            _evo_url('sendList'),
+            _evo_url('sendList', instancia),
             json={
                 'number': telefone,
                 'title': titulo,
@@ -242,7 +248,7 @@ async def enviar_lista_whatsapp(
     except Exception:
         logger.exception('Falha ao enviar lista WhatsApp para %s', telefone)
         enviado = False
-    await registrar_mensagem_enviada(telefone, f'[lista] {titulo}', 'bot', enviado)
+    await registrar_mensagem_enviada(telefone, f'[lista] {titulo}', 'bot', enviado, loja_id)
     return enviado
 
 
@@ -265,9 +271,10 @@ async def enviar_botoes_whatsapp(
     Returns:
         True se o envio foi bem-sucedido.
     """
+    instancia, loja_id = await rota(telefone)
     try:
         await _post_com_retry(
-            _evo_url('sendButtons'),
+            _evo_url('sendButtons', instancia),
             json={
                 'number': telefone,
                 'title': titulo,
@@ -284,7 +291,7 @@ async def enviar_botoes_whatsapp(
     except Exception:
         logger.exception('Falha ao enviar botões WhatsApp para %s', telefone)
         enviado = False
-    await registrar_mensagem_enviada(telefone, f'[botões] {titulo}', 'bot', enviado)
+    await registrar_mensagem_enviada(telefone, f'[botões] {titulo}', 'bot', enviado, loja_id)
     return enviado
 
 
@@ -310,11 +317,15 @@ async def notificar_equipe(
     if mensagem_de_cliente and not config.avisar_mensagens_atendimento:
         return False
 
+    if telefone and await Loja.objects.filter(ativa=True).acount() > 1:
+        loja = await Loja.objects.filter(clientes__telefone=telefone).afirst()
+        if loja is not None:
+            mensagem += f'\n📱 Pelo número: {loja.nome}'
     if telefone and settings.PAINEL_URL:
         mensagem += f"\n🔗 {settings.PAINEL_URL.rstrip('/')}/painel/conversas/{telefone}/"
     try:
         await _post_com_retry(
-            _evo_url('sendText'),
+            _evo_url('sendText', await instancia_principal()),
             json={'number': config.grupo_avisos_id, 'text': mensagem},
             headers=_evo_headers(),
             label='Aviso no grupo da equipe',
@@ -334,7 +345,7 @@ async def listar_grupos_whatsapp(timeout: float = 10) -> list[dict]:
     """
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.get(
-            f"{settings.EVOLUTION_API_URL}/group/fetchAllGroups/{settings.EVOLUTION_INSTANCE}",
+            f"{settings.EVOLUTION_API_URL}/group/fetchAllGroups/{await instancia_principal()}",
             params={'getParticipants': 'false'},
             headers=_evo_headers(),
         )
@@ -351,11 +362,66 @@ async def listar_grupos_whatsapp(timeout: float = 10) -> list[dict]:
     return sorted(grupos, key=lambda g: g['nome'].lower())
 
 
-async def baixar_midia(data: dict) -> tuple[bytes, str] | None:
+# ── Números (instâncias da Evolution), usados na página Lojas do painel ──
+
+
+async def estado_conexao(instancia: str, timeout: float = 5) -> str:
+    """'open' (conectado), 'connecting', 'close' ou '' se a Evolution não respondeu."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(
+                f"{settings.EVOLUTION_API_URL}/instance/connectionState/{instancia}",
+                headers=_evo_headers(),
+            )
+        if resp.status_code == 404:
+            return 'inexistente'
+        resp.raise_for_status()
+        return ((resp.json() or {}).get('instance') or {}).get('state') or ''
+    except Exception as e:
+        logger.warning('Estado da instância %s indisponível: %s', instancia, e)
+        return ''
+
+
+async def criar_instancia(instancia: str) -> None:
+    """Cria a instância na Evolution; se ela já existe, não faz nada.
+
+    Raises:
+        httpx.HTTPError: se a Evolution recusar ou não responder.
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{settings.EVOLUTION_API_URL}/instance/create",
+            json={'instanceName': instancia, 'integration': 'WHATSAPP-BAILEYS', 'qrcode': True},
+            headers=_evo_headers(),
+        )
+    if resp.status_code in (400, 403, 409) and 'already in use' in resp.text:
+        return
+    resp.raise_for_status()
+
+
+async def qr_code(instancia: str) -> str:
+    """Imagem (data:image/png;base64,...) do QR Code para conectar o número, ou ''."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{settings.EVOLUTION_API_URL}/instance/connect/{instancia}",
+                headers=_evo_headers(),
+            )
+        resp.raise_for_status()
+        imagem = (resp.json() or {}).get('base64') or ''
+    except Exception as e:
+        logger.warning('QR Code da instância %s indisponível: %s', instancia, e)
+        return ''
+    if imagem and not imagem.startswith('data:'):
+        imagem = f'data:image/png;base64,{imagem}'
+    return imagem
+
+
+async def baixar_midia(data: dict, instancia: str) -> tuple[bytes, str] | None:
     """Conteúdo e mimetype de uma mídia recebida (áudio ou imagem), ou None.
 
     Usa o base64 que já vem no webhook (opção "webhook_base64" da Evolution);
-    sem ele, pede o arquivo à Evolution pelo id da mensagem.
+    sem ele, pede o arquivo à instância da Evolution que recebeu a mensagem.
     """
     mensagem = data.get('message') or {}
     documento = mensagem.get('documentMessage') or (
@@ -375,7 +441,7 @@ async def baixar_midia(data: dict) -> tuple[bytes, str] | None:
             logger.warning('base64 inválido no webhook, buscando a mídia na Evolution')
     try:
         resp = await _post_com_retry(
-            f"{settings.EVOLUTION_API_URL}/chat/getBase64FromMediaMessage/{settings.EVOLUTION_INSTANCE}",
+            f"{settings.EVOLUTION_API_URL}/chat/getBase64FromMediaMessage/{instancia}",
             json={'message': {'key': data.get('key') or {}}, 'convertToMp4': False},
             headers=_evo_headers(),
             timeout=60,

@@ -1,4 +1,5 @@
 {% extends 'painel/base.html' %}
+{% load painel_tags %}
 {% block titulo %}Conversas{% endblock %}
 {% block estilo %}
 .conversa-item { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); color: var(--text); }
@@ -15,12 +16,21 @@
 <form class="filtros" method="get">
   <input type="search" name="q" value="{{ busca }}" placeholder="Buscar por nome ou número">
   {% if filtro %}<input type="hidden" name="filtro" value="{{ filtro }}">{% endif %}
+  {% if loja %}<input type="hidden" name="loja" value="{{ loja }}">{% endif %}
   <div class="chips">
-    <a class="chip {% if not filtro %}ativo{% endif %}" href="?{% if busca %}q={{ busca|urlencode }}{% endif %}">Todas</a>
-    <a class="chip {% if filtro == 'atendente' %}ativo{% endif %}" href="?filtro=atendente{% if busca %}&q={{ busca|urlencode }}{% endif %}">Aguardando atendente</a>
-    <a class="chip {% if filtro == 'nao_lidas' %}ativo{% endif %}" href="?filtro=nao_lidas{% if busca %}&q={{ busca|urlencode }}{% endif %}">Não lidas</a>
-    <a class="chip {% if filtro == 'pedido' %}ativo{% endif %}" href="?filtro=pedido{% if busca %}&q={{ busca|urlencode }}{% endif %}">Com pedido aberto</a>
+    <a class="chip {% if not filtro %}ativo{% endif %}" href="{% url_com filtro='' %}">Todas</a>
+    <a class="chip {% if filtro == 'atendente' %}ativo{% endif %}" href="{% url_com filtro='atendente' %}">Aguardando atendente</a>
+    <a class="chip {% if filtro == 'nao_lidas' %}ativo{% endif %}" href="{% url_com filtro='nao_lidas' %}">Não lidas</a>
+    <a class="chip {% if filtro == 'pedido' %}ativo{% endif %}" href="{% url_com filtro='pedido' %}">Com pedido aberto</a>
   </div>
+  {% if lojas_ativas|length > 1 %}
+  <div class="chips">
+    <a class="chip {% if not loja %}ativo{% endif %}" href="{% url_com loja='' pagina='' %}">Todas as lojas</a>
+    {% for l in lojas_ativas %}
+      <a class="chip {% if loja == l.pk|stringformat:'d' %}ativo{% endif %}" href="{% url_com loja=l.pk pagina='' %}">{{ l.nome }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
 </form>
 <div class="cartao lista" id="lista-conversas"
      hx-get="{{ request.get_full_path }}" hx-trigger="every 10s" hx-swap="innerHTML">
