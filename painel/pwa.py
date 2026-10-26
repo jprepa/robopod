@@ -1,16 +1,23 @@
-"""Painel como app no celular (PWA): manifest, service worker e ícones.
+"""Painel como app no celular (PWA): manifest, service worker, ícones e a
+inscrição nas notificações.
 
 Com isso, "Adicionar à Tela de Início" no iPhone (ou "Instalar app" no
 Android/Chrome) abre o painel em tela cheia, sem a barra do navegador.
-As rotas são públicas: o celular busca o manifest e os ícones sem o cookie
-de login. Nada aqui expõe dados da loja.
+Manifest, service worker e ícones são públicos: o celular busca esses
+arquivos sem o cookie de login. Nada neles expõe dados da loja.
 """
 
+import json
 from pathlib import Path
 
+from django.contrib.auth.decorators import login_required
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.urls import reverse
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_POST
+
+from . import auditoria, push
+from .auditoria import Tipo
+from .models import InscricaoPush
 
 PASTA_ICONES = Path(__file__).resolve().parent / 'pwa'
 ICONES = {'icone-180', 'icone-192', 'icone-512', 'favicon'}
@@ -81,12 +88,132 @@ self.addEventListener('fetch', (evento) => {
   evento.respondWith(fetch(evento.request).catch(() =>
     new Response(SEM_CONEXAO, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })));
 });
+
+// Notificação vinda do serviço `notificacoes` (painel/push.py)
+self.addEventListener('push', (evento) => {
+  let d = {};
+  try { d = evento.data ? evento.data.json() : {}; } catch (e) {}
+  const tarefas = [self.registration.showNotification(d.titulo || 'Robopod', {
+    body: d.corpo || '',
+    tag: d.tag || undefined,
+    renotify: !!d.tag,  // mesmo pedido/conversa substitui o aviso anterior, mas toca de novo
+    icon: ICONE,
+    badge: ICONE,
+    data: { url: d.url || INICIO },
+  })];
+  // Número no ícone do app (iPhone com iOS 16.4+, Android)
+  if (typeof d.contador === 'number' && self.navigator.setAppBadge) {
+    tarefas.push((d.contador ? self.navigator.setAppBadge(d.contador) : self.navigator.clearAppBadge()).catch(() => {}));
+  }
+  evento.waitUntil(Promise.all(tarefas));
+});
+
+// Tocar na notificação abre o painel direto no pedido ou na conversa
+self.addEventListener('notificationclick', (evento) => {
+  evento.notification.close();
+  const url = new URL(evento.notification.data?.url || INICIO, self.location.origin).href;
+  evento.waitUntil((async () => {
+    const janelas = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const janela of janelas) {
+      try {
+        await janela.focus();
+        await janela.navigate(url);
+        return;
+      } catch (e) {}
+    }
+    await self.clients.openWindow(url);
+  })());
+});
 """
 
 
 @require_GET
 def service_worker(request):
-    resposta = HttpResponse(SERVICE_WORKER, content_type='text/javascript; charset=utf-8')
+    constantes = (f'const INICIO = {json.dumps(reverse("painel:inicio"))};\n'
+                  f'const ICONE = {json.dumps(reverse("painel:pwa_icone", args=["icone-192"]))};\n')
+    resposta = HttpResponse(constantes + SERVICE_WORKER, content_type='text/javascript; charset=utf-8')
     # Sem cache: assim uma versão nova do service worker chega logo aos celulares
     resposta['Cache-Control'] = 'no-cache'
     return resposta
+
+
+# ── Inscrição nas notificações (seção "Notificações neste aparelho" em Configurações) ──
+
+def _aparelho(request) -> str:
+    ua = request.META.get('HTTP_USER_AGENT', '')
+    for chave, nome in (('iPhone', 'iPhone'), ('iPad', 'iPad'), ('Android', 'Android'),
+                        ('Windows', 'Windows'), ('Macintosh', 'Mac'), ('Linux', 'Linux')):
+        if chave in ua:
+            return nome
+    return ''
+
+
+def _ler_json(request) -> dict:
+    try:
+        dados = json.loads(request.body or b'{}')
+    except ValueError:
+        return {}
+    return dados if isinstance(dados, dict) else {}
+
+
+def _inscricao_do_pedido(request, dados) -> InscricaoPush | None:
+    endpoint = str(dados.get('endpoint') or '')
+    return InscricaoPush.objects.filter(endpoint=endpoint, usuario=request.user).first() if endpoint else None
+
+
+@login_required
+@require_POST
+def push_salvar(request):
+    """Cria ou atualiza a inscrição deste aparelho (e os eventos escolhidos)."""
+    if not push.ativo():
+        return JsonResponse({'erro': 'Notificações não configuradas no servidor'}, status=503)
+    dados = _ler_json(request)
+    inscricao = dados.get('inscricao') or {}
+    endpoint = str(inscricao.get('endpoint') or '')
+    chaves = inscricao.get('keys') or {}
+    if not push.endpoint_valido(endpoint) or not chaves.get('p256dh') or not chaves.get('auth'):
+        return JsonResponse({'erro': 'Inscrição inválida'}, status=400)
+
+    existente = InscricaoPush.objects.filter(endpoint=endpoint).first()
+    eventos = dados.get('eventos')
+    if isinstance(eventos, list):
+        eventos = [e for e in eventos if e in push.EVENTOS]
+    else:
+        # Só sincronizando (a página abriu): mantém o que o aparelho já tinha
+        eventos = existente.eventos if existente else push.EVENTOS_PADRAO
+    # O mesmo aparelho pode trocar de usuário: a inscrição passa para quem está logado
+    obj, criada = InscricaoPush.objects.update_or_create(endpoint=endpoint, defaults={
+        'usuario': request.user,
+        'p256dh': str(chaves['p256dh'])[:200],
+        'auth': str(chaves['auth'])[:100],
+        'eventos': eventos,
+        'aparelho': _aparelho(request),
+    })
+    if criada:
+        auditoria.registrar(request, Tipo.CONFIGURACAO, 'notificacoes_ativar',
+                            f'Ativou as notificações no aparelho ({obj.aparelho or "desconhecido"})')
+    return JsonResponse({'eventos': obj.eventos})
+
+
+@login_required
+@require_POST
+def push_cancelar(request):
+    inscricao = _inscricao_do_pedido(request, _ler_json(request))
+    if inscricao:
+        inscricao.delete()
+        auditoria.registrar(request, Tipo.CONFIGURACAO, 'notificacoes_desativar',
+                            f'Desativou as notificações no aparelho ({inscricao.aparelho or "desconhecido"})')
+    return JsonResponse({'ok': True})
+
+
+@login_required
+@require_POST
+def push_testar(request):
+    inscricao = _inscricao_do_pedido(request, _ler_json(request))
+    if not inscricao or not push.ativo():
+        return JsonResponse({'ok': False}, status=404)
+    ok = push.enviar(inscricao, {
+        'titulo': 'Teste do Robopod', 'corpo': 'As notificações estão funcionando neste aparelho.',
+        'url': reverse('painel:configuracoes') + '#notificacoes', 'tag': 'teste',
+    })
+    return JsonResponse({'ok': ok})

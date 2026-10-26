@@ -37,7 +37,7 @@
       </details>
       <div class="campo"><label><input type="checkbox" name="avisos_ativos" value="1" {% if config.avisos_ativos %}checked{% endif %}> Enviar avisos</label></div>
       <div class="campo"><label><input type="checkbox" name="avisar_mensagens_atendimento" value="1" {% if config.avisar_mensagens_atendimento %}checked{% endif %}> Repassar ao grupo as mensagens de clientes em atendimento humano</label>
-        <div class="ajuda">Desligue se a equipe acompanha tudo pelo painel e o grupo ficar barulhento.</div></div>
+        <div class="ajuda">Com as <a href="#notificacoes">notificações no celular</a> ligadas, pode desligar: elas já avisam dessas mensagens sem encher o grupo, que fica só com pedidos, comprovantes e pedidos de atendente.</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn primario" type="submit">Salvar</button>
         {% if config.grupo_avisos_id %}<button class="btn" type="submit" name="testar" value="1" formnovalidate>Enviar mensagem de teste</button>{% endif %}
@@ -87,6 +87,22 @@
       <p class="muted" style="margin-top:0">Para os avisos virem com link da conversa no painel, preencha <code>PAINEL_URL</code> no <code>.env</code> da VPS (ex.: <code>https://painel.seudominio.com.br</code>) e reinicie o app.</p>
     {% endif %}
   </section>
+  <section class="cartao" id="notificacoes" style="grid-column: 1 / -1">
+    <h2>Notificações neste aparelho</h2>
+    <p class="muted" style="margin-top:0">
+      Avisos no celular mesmo com o painel fechado e a tela bloqueada. Mostram o tipo do aviso e o
+      nome do cliente, nunca o texto da mensagem. Cada pessoa ativa no próprio aparelho.
+    </p>
+    <div class="grade" style="gap:10px">
+      <div id="push-status" class="muted">Verificando…</div>
+      <div class="filtros" style="margin:0">
+        <button type="button" class="btn primario" id="push-ativar" hidden>Ativar notificações</button>
+        <button type="button" class="btn" id="push-testar" hidden>Enviar teste</button>
+        <button type="button" class="btn perigo" id="push-desativar" hidden>Desativar neste aparelho</button>
+      </div>
+      <div class="tabela-wrap" id="push-eventos-bloco" hidden><table id="push-eventos"><tbody></tbody></table></div>
+    </div>
+  </section>
   <section class="cartao" id="sons" style="grid-column: 1 / -1">
     <h2>Sons de alerta neste navegador</h2>
     <p class="muted" style="margin-top:0">
@@ -105,7 +121,121 @@
 </div>
 {% endblock %}
 {% block script %}
+{{ push_eventos|json_script:"push-eventos-dados" }}
 <script>
+// Notificações (Web Push): inscreve este aparelho e guarda os eventos escolhidos
+(function () {
+  const CHAVE = '{{ push_chave }}';
+  const EVENTOS = JSON.parse(document.getElementById('push-eventos-dados').textContent);
+  const URLS = {
+    salvar: '{% url "painel:push_salvar" %}',
+    cancelar: '{% url "painel:push_cancelar" %}',
+    testar: '{% url "painel:push_testar" %}',
+  };
+  const $ = (id) => document.getElementById(id);
+  const status = $('push-status'), ativar = $('push-ativar'), testar = $('push-testar'), desativar = $('push-desativar');
+  const blocoEventos = $('push-eventos-bloco'), corpo = document.querySelector('#push-eventos tbody');
+  let inscricao = null;
+
+  function mostrar(texto, { ativada = false, podeAtivar = false } = {}) {
+    status.textContent = texto;
+    ativar.hidden = !podeAtivar;
+    testar.hidden = desativar.hidden = blocoEventos.hidden = !ativada;
+  }
+
+  function enviar(url, dados) {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token }}' },
+      body: JSON.stringify(dados),
+    }).then(r => r.json().then(j => (r.ok ? j : Promise.reject(j))));
+  }
+
+  function base64ParaBytes(b64) {
+    const pad = '='.repeat((4 - b64.length % 4) % 4);
+    const bin = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(bin, c => c.charCodeAt(0));
+  }
+
+  function desenharEventos(escolhidos) {
+    corpo.innerHTML = '';
+    for (const ev of EVENTOS) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td><label><input type="checkbox"> <span></span></label></td>';
+      const caixa = tr.querySelector('input');
+      tr.querySelector('span').textContent = ev.nome;
+      caixa.checked = escolhidos.includes(ev.chave);
+      caixa.addEventListener('change', () => {
+        const marcados = EVENTOS.filter((e, i) => corpo.querySelectorAll('input')[i].checked).map(e => e.chave);
+        enviar(URLS.salvar, { inscricao: inscricao.toJSON(), eventos: marcados })
+          .catch(() => { caixa.checked = !caixa.checked; alert('Não foi possível salvar. Tente de novo.'); });
+      });
+      corpo.appendChild(tr);
+    }
+  }
+
+  async function sincronizar(eventos) {
+    const r = await enviar(URLS.salvar, eventos ? { inscricao: inscricao.toJSON(), eventos } : { inscricao: inscricao.toJSON() });
+    desenharEventos(r.eventos);
+    mostrar('✅ Notificações ativadas neste aparelho. Escolha abaixo o que quer receber.', { ativada: true });
+  }
+
+  async function iniciar() {
+    if (!CHAVE) return mostrar('As notificações ainda não foram configuradas no servidor (faltam as chaves VAPID no .env).');
+    const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    const instalado = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+      return mostrar(ios && !instalado
+        ? 'No iPhone, as notificações só funcionam com o painel instalado: no Safari, toque em Compartilhar → Adicionar à Tela de Início, abra o Robopod pelo ícone e volte aqui.'
+        : 'Este navegador não aceita notificações. No iPhone, é preciso o iOS 16.4 ou mais novo.');
+    }
+    if (Notification.permission === 'denied') {
+      return mostrar('As notificações estão bloqueadas para o painel. Libere nos ajustes do aparelho (no iPhone: Ajustes → Notificações → Robopod) e recarregue esta página.');
+    }
+    const reg = await navigator.serviceWorker.ready;
+    inscricao = await reg.pushManager.getSubscription();
+    if (inscricao && Notification.permission === 'granted') {
+      try { return await sincronizar(); } catch (e) { /* servidor não reconheceu: oferece ativar de novo */ }
+    }
+    mostrar('As notificações estão desligadas neste aparelho.', { podeAtivar: true });
+  }
+
+  ativar.addEventListener('click', async () => {
+    ativar.disabled = true;
+    try {
+      // No iPhone o pedido de permissão precisa vir direto do toque no botão
+      const permissao = await Notification.requestPermission();
+      if (permissao !== 'granted') return iniciar();
+      const reg = await navigator.serviceWorker.ready;
+      inscricao = await reg.pushManager.getSubscription()
+        || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64ParaBytes(CHAVE) });
+      await sincronizar(EVENTOS.filter(e => e.padrao).map(e => e.chave));
+    } catch (e) {
+      mostrar('Não foi possível ativar: ' + (e.erro || e.message || e), { podeAtivar: true });
+    } finally {
+      ativar.disabled = false;
+    }
+  });
+
+  testar.addEventListener('click', () => {
+    testar.disabled = true;
+    enviar(URLS.testar, { endpoint: inscricao.endpoint })
+      .then(r => { if (!r.ok) throw r; status.textContent = '📨 Teste enviado. Deve chegar em alguns segundos.'; })
+      .catch(() => { status.textContent = 'O teste não saiu. Desative e ative de novo neste aparelho.'; })
+      .finally(() => { testar.disabled = false; });
+  });
+
+  desativar.addEventListener('click', async () => {
+    const endpoint = inscricao.endpoint;
+    await inscricao.unsubscribe().catch(() => {});
+    await enviar(URLS.cancelar, { endpoint }).catch(() => {});
+    inscricao = null;
+    mostrar('As notificações estão desligadas neste aparelho.', { podeAtivar: true });
+  });
+
+  iniciar().catch(e => mostrar('Não foi possível verificar as notificações: ' + (e.message || e)));
+})();
+
 (function () {
   const sons = window.alertasSom;
   const ativo = document.getElementById('som-ativo');

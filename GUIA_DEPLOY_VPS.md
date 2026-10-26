@@ -224,6 +224,37 @@ Cardápio, estoque, equipe, horário, PIX e grupo de avisos são os mesmos para 
 números. O cliente é um só: o painel mostra por qual número ele chegou e o bot e os
 atendentes respondem pelo número que ele usou por último.
 
+### Passo S11 — Notificações no celular
+
+O serviço `notificacoes` avisa o celular da equipe (mesmo com a tela bloqueada) quando
+chega pedido, comprovante, pagamento, um cliente pede atendente ou manda mensagem em
+atendimento humano. O aviso mostra só o tipo e o nome do cliente, nunca o texto.
+
+1. Gere as chaves **uma vez só** (trocar depois desliga as notificações de todo mundo):
+
+   ```bash
+   docker compose up -d --build
+   docker compose run --rm app python manage.py gerar_chaves_push
+   ```
+
+2. Cole as duas linhas que aparecerem no `.env`, junto com um e-mail de contato (a Apple
+   exige):
+
+   ```env
+   VAPID_PUBLIC_KEY=...
+   VAPID_PRIVATE_KEY=...
+   VAPID_CONTATO=mailto:seu@email.com
+   ```
+
+3. Recarregue o app e o serviço: `docker compose up -d app notificacoes`.
+   Em `docker compose logs notificacoes` deve aparecer **Notificações ligadas**.
+4. Em cada celular: instale o painel na tela de início (Passo S7), abra pelo ícone,
+   vá em **Configurações → Notificações neste aparelho → Ativar notificações** e toque
+   em **Enviar teste**. No iPhone precisa do **iOS 16.4 ou mais novo**.
+
+A notificação chega mesmo com o Tailscale desligado; para abrir o painel ao tocar nela,
+o Tailscale precisa estar ligado.
+
 ### Se algo der errado
 
 ```bash

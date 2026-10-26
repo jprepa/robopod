@@ -100,6 +100,22 @@ services:
     command: >
       sh -c "sleep 120; while true; do python manage.py limpar_dados; sleep 86400; done"
 
+  # ── Notificações no celular da equipe (pedido, comprovante, atendente) ──
+  notificacoes:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Mostra as mensagens no "docker compose logs" na hora (o processo não termina)
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      app:
+        condition: service_started
+    # Espera o app aplicar as migrações antes de começar
+    command: >
+      sh -c "sleep 30; python manage.py enviar_notificacoes"
+
 volumes:
   pgdata:
   redis_data:

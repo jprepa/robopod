@@ -49,6 +49,8 @@
   --shadow: none;
 }
 * { box-sizing: border-box; }
+/* O atributo hidden vale mesmo em elementos com display próprio (.btn, .grade...) */
+[hidden] { display: none !important; }
 html, body { margin: 0; }
 body {
   background: var(--bg); color: var(--text);
@@ -331,6 +333,8 @@ window.alertasSom = (function () {
     }
     const total = c.aguardando_atendente + c.pedidos_conferir;
     document.title = total ? `(${total}) ${tituloBase}` : tituloBase;
+    // Mesmo número no ícone do app instalado (iPhone com notificações ativadas, Android)
+    if (navigator.setAppBadge) (total ? navigator.setAppBadge(total) : navigator.clearAppBadge()).catch(() => {});
     window.alertasSom.verificar(c);
   }
   const buscar = () => fetch('{% url "painel:contadores" %}').then(r => r.ok ? r.json() : null).then(c => c && aplicar(c)).catch(() => {});

@@ -12,6 +12,8 @@ quando a Evolution demora a responder.
 import asyncio
 import base64
 import logging
+import random
+import time
 
 import httpx
 from django.conf import settings
@@ -31,10 +33,18 @@ _MAX_TENTATIVAS = 3
 _BACKOFF_BASE = 1.5  # segundos — cresce exponencialmente (1.5, 3, 6)
 
 # "Digitando..." antes de cada resposta do bot, para não parecer robô.
-# Cresce com o tamanho do texto, mas fica curto: o webhook espera o envio.
-_DIGITANDO_MIN_MS = 1000
-_DIGITANDO_MS_POR_CARACTERE = 25
-_DIGITANDO_MAX_MS = 3500
+# Cresce com o tamanho do texto e varia um pouco a cada mensagem: tempo
+# sempre igual para o mesmo texto é a marca mais fácil de um robô.
+_DIGITANDO_MIN_MS = 1200
+_DIGITANDO_MS_POR_CARACTERE = 30
+_DIGITANDO_MAX_MS = 6000
+_DIGITANDO_VARIACAO = 0.25  # ±25%
+
+# Duas mensagens do bot seguidas (boas-vindas + cardápio, vários sabores):
+# uma pausa entre elas, como quem termina uma e começa a próxima.
+_EM_SEQUENCIA_S = 6
+_PAUSA_ENTRE_MENSAGENS_S = (0.8, 2.0)
+_ultimo_envio: dict[str, float] = {}
 
 
 async def _post_com_retry(
@@ -88,8 +98,44 @@ def _evo_url(endpoint: str, instancia: str) -> str:
 
 def _delay_digitando(texto: str) -> int:
     """Milissegundos de "digitando..." que a Evolution mostra antes de enviar."""
-    ms = _DIGITANDO_MIN_MS + len(texto) * _DIGITANDO_MS_POR_CARACTERE
-    return min(ms, _DIGITANDO_MAX_MS)
+    ms = min(_DIGITANDO_MIN_MS + len(texto) * _DIGITANDO_MS_POR_CARACTERE, _DIGITANDO_MAX_MS)
+    return int(ms * random.uniform(1 - _DIGITANDO_VARIACAO, 1 + _DIGITANDO_VARIACAO))
+
+
+async def _pausa_se_em_sequencia(telefone: str) -> None:
+    """Espera um pouco se o bot acabou de mandar outra mensagem a esse cliente."""
+    ultimo = _ultimo_envio.get(telefone)
+    if ultimo is not None and time.monotonic() - ultimo < _EM_SEQUENCIA_S:
+        await asyncio.sleep(random.uniform(*_PAUSA_ENTRE_MENSAGENS_S))
+
+
+def _registrar_envio(telefone: str) -> None:
+    agora = time.monotonic()
+    _ultimo_envio[telefone] = agora
+    if len(_ultimo_envio) > 5000:  # esquece quem não recebe nada há tempo
+        for numero, quando in list(_ultimo_envio.items()):
+            if agora - quando > _EM_SEQUENCIA_S:
+                del _ultimo_envio[numero]
+
+
+async def marcar_como_lidas(instancia: str, chaves: list[dict]) -> None:
+    """Marca as mensagens do cliente como lidas (tracinhos azuis), como quem
+    abre a conversa antes de responder. Falha não impede a resposta."""
+    chaves = [c for c in chaves if c.get('id') and c.get('remoteJid')]
+    if not chaves:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{settings.EVOLUTION_API_URL}/chat/markMessageAsRead/{instancia}",
+                json={'readMessages': [
+                    {'remoteJid': c['remoteJid'], 'fromMe': False, 'id': c['id']} for c in chaves
+                ]},
+                headers=_evo_headers(),
+            )
+        resp.raise_for_status()
+    except Exception as e:
+        logger.warning('Não foi possível marcar como lidas as mensagens (%s): %s', instancia, e)
 
 
 async def enviar_whatsapp(telefone: str, mensagem: str, autor: str = 'bot') -> bool:
@@ -107,6 +153,7 @@ async def enviar_whatsapp(telefone: str, mensagem: str, autor: str = 'bot') -> b
     if autor == 'bot':
         # Mensagem de atendente já foi digitada por uma pessoa, não precisa
         payload['delay'] = _delay_digitando(mensagem)
+        await _pausa_se_em_sequencia(telefone)
     instancia, loja_id = await rota(telefone)
     try:
         await _post_com_retry(
@@ -115,6 +162,7 @@ async def enviar_whatsapp(telefone: str, mensagem: str, autor: str = 'bot') -> b
             headers=_evo_headers(),
             label=f'WhatsApp texto → {telefone}',
         )
+        _registrar_envio(telefone)
         logger.info('WhatsApp enviado para %s', telefone)
         enviado = True
     except Exception:
@@ -139,6 +187,7 @@ async def enviar_imagem_whatsapp(
     Returns:
         True se o envio foi bem-sucedido.
     """
+    await _pausa_se_em_sequencia(telefone)
     instancia, loja_id = await rota(telefone)
     try:
         await _post_com_retry(
@@ -154,6 +203,7 @@ async def enviar_imagem_whatsapp(
             headers=_evo_headers(),
             label=f'WhatsApp imagem → {telefone}',
         )
+        _registrar_envio(telefone)
         logger.info('Imagem WhatsApp enviada para %s', telefone)
         enviado = True
     except Exception:
@@ -179,6 +229,7 @@ async def enviar_documento_whatsapp(
     Returns:
         True se o envio foi bem-sucedido.
     """
+    await _pausa_se_em_sequencia(telefone)
     instancia, loja_id = await rota(telefone)
     try:
         await _post_com_retry(
@@ -190,11 +241,13 @@ async def enviar_documento_whatsapp(
                 'fileName': nome_arquivo,
                 'caption': legenda,
                 'media': base64.b64encode(conteudo).decode(),
+                'delay': _delay_digitando(legenda),
             },
             headers=_evo_headers(),
             timeout=90,  # arquivo grande: a Evolution ainda sobe para o WhatsApp
             label=f'WhatsApp documento → {telefone}',
         )
+        _registrar_envio(telefone)
         logger.info('Documento WhatsApp enviado para %s', telefone)
         enviado = True
     except Exception:
@@ -227,6 +280,7 @@ async def enviar_lista_whatsapp(
     Returns:
         True se o envio foi bem-sucedido.
     """
+    await _pausa_se_em_sequencia(telefone)
     instancia, loja_id = await rota(telefone)
     try:
         await _post_com_retry(
@@ -243,6 +297,7 @@ async def enviar_lista_whatsapp(
             headers=_evo_headers(),
             label=f'WhatsApp lista → {telefone}',
         )
+        _registrar_envio(telefone)
         logger.info('Lista interativa WhatsApp enviada para %s', telefone)
         enviado = True
     except Exception:
@@ -271,6 +326,7 @@ async def enviar_botoes_whatsapp(
     Returns:
         True se o envio foi bem-sucedido.
     """
+    await _pausa_se_em_sequencia(telefone)
     instancia, loja_id = await rota(telefone)
     try:
         await _post_com_retry(
@@ -286,6 +342,7 @@ async def enviar_botoes_whatsapp(
             headers=_evo_headers(),
             label=f'WhatsApp botões → {telefone}',
         )
+        _registrar_envio(telefone)
         logger.info('Botões WhatsApp enviados para %s', telefone)
         enviado = True
     except Exception:

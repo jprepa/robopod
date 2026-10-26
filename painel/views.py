@@ -31,7 +31,7 @@ from core.notificacoes import (
     criar_instancia, enviar_whatsapp, estado_conexao, listar_grupos_whatsapp, notificar_equipe, qr_code,
 )
 
-from . import auditoria, catalogo, servicos
+from . import auditoria, catalogo, push, servicos
 from .auditoria import Tipo
 from .forms import CategoriaForm, ClienteForm, ProdutoForm, RespostaRapidaForm, VarianteFormSet
 from .models import (
@@ -1353,6 +1353,8 @@ def configuracoes(request):
         'secao': 'configuracoes', 'config': config, 'grupos': grupos, 'erro_grupos': erro_grupos,
         'grupo_na_lista': any(g['id'] == config.grupo_avisos_id for g in grupos),
         'painel_url': settings.PAINEL_URL,
+        'push_chave': settings.VAPID_PUBLIC_KEY if push.ativo() else '',
+        'push_eventos': [{'chave': k, 'nome': nome, 'padrao': padrao} for k, (nome, padrao) in push.EVENTOS.items()],
     })
 
 

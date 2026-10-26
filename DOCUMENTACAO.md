@@ -364,6 +364,13 @@ Por isso nenhuma porta precisa ficar aberta:
 O serviço `limpeza` do docker-compose roda `python manage.py limpar_dados` uma vez por dia
 (dá para rodar na mão: `docker compose exec app python manage.py limpar_dados --simular`).
 
+O serviço `notificacoes` roda `python manage.py enviar_notificacoes` sem parar: a cada 10 s
+compara o banco com a volta anterior e manda Web Push aos aparelhos inscritos
+(Configurações → Notificações neste aparelho). O aviso leva só o tipo do evento e o nome do
+cliente, nunca o texto da mensagem, e só sai para os serviços de push dos navegadores
+(Apple, Google, Mozilla, Microsoft). Chaves no `.env`: `VAPID_PUBLIC_KEY`,
+`VAPID_PRIVATE_KEY` e `VAPID_CONTATO` (gere com `python manage.py gerar_chaves_push`).
+
 | Dado | Quando sai |
 |---|---|
 | Comprovante PIX | Na hora em que o pagamento é confirmado ou o pedido é cancelado |

@@ -20,6 +20,9 @@ urlpatterns = [
     path('manifest.webmanifest', pwa.manifest, name='pwa_manifest'),
     path('sw.js', pwa.service_worker, name='pwa_service_worker'),
     path('icones/<str:nome>.png', pwa.icone, name='pwa_icone'),
+    path('notificacoes/salvar/', pwa.push_salvar, name='push_salvar'),
+    path('notificacoes/cancelar/', pwa.push_cancelar, name='push_cancelar'),
+    path('notificacoes/testar/', pwa.push_testar, name='push_testar'),
 
     path('conversas/', views.conversas, name='conversas'),
     path('conversas/<str:telefone>/', views.conversa, name='conversa'),

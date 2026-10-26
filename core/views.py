@@ -9,7 +9,10 @@ import asyncio
 import hmac
 import json
 import logging
+import random
 import re
+import time
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 
 from asgiref.sync import sync_to_async
@@ -28,7 +31,7 @@ from .llm_service import (
     descrever_imagem,
 )
 from .notificacoes import (
-    enviar_whatsapp, notificar_equipe, baixar_midia,
+    enviar_whatsapp, notificar_equipe, baixar_midia, marcar_como_lidas,
     enviar_lista_whatsapp, enviar_imagem_whatsapp, enviar_documento_whatsapp,
 )
 from painel import catalogo, lojas, servicos
@@ -225,20 +228,48 @@ async def _enviar_pdf_cardapio(telefone: str, rodape: bool = True) -> bool:
     )
 
 
+# Várias versões, sorteadas a cada cliente novo: o mesmo texto idêntico
+# para todo mundo é um padrão de robô. Todas citam o cardápio e o *atendente*.
 _BOAS_VINDAS = (
-    'Olá! 👋 Bem-vindo ao Assistente Virtual da *Vape Rio Delivery*! 🌙\n\n'
-    'Aqui embaixo vai nosso cardápio com os modelos e preços. '
-    'Me fala qual modelo você quer que eu te mando os sabores disponíveis =)\n\n'
-    '🙋 Prefere falar com uma pessoa? Digite *atendente* a qualquer momento.'
+    (
+        'Olá! 👋 Bem-vindo ao Assistente Virtual da *Vape Rio Delivery*! 🌙\n\n'
+        'Aqui embaixo vai nosso cardápio com os modelos e preços. '
+        'Me fala qual modelo você quer que eu te mando os sabores disponíveis =)\n\n'
+        '🙋 Prefere falar com uma pessoa? Digite *atendente* a qualquer momento.'
+    ),
+    (
+        'Oi! 😊 Aqui é o Assistente Virtual da *Vape Rio Delivery* 🌙\n\n'
+        'Logo abaixo te mandei o cardápio com os modelos e preços. '
+        'É só me dizer qual modelo te interessa que eu passo os sabores que temos!\n\n'
+        '🙋 Se quiser falar com uma pessoa, digite *atendente* quando quiser.'
+    ),
+    (
+        'E aí! 👋 Você está falando com o Assistente Virtual da *Vape Rio Delivery* 🌙\n\n'
+        'Segue aqui embaixo nosso cardápio com modelos e preços. '
+        'Escolheu o modelo? Me fala que eu te mostro os sabores disponíveis =)\n\n'
+        '🙋 Para falar com um atendente, é só digitar *atendente*.'
+    ),
+    (
+        'Olá, tudo bem? 👋 Sou o Assistente Virtual da *Vape Rio Delivery* 🌙\n\n'
+        'Aqui embaixo está o nosso cardápio com os modelos e preços. '
+        'Me conta qual modelo você quer e eu te mando os sabores disponíveis!\n\n'
+        '🙋 Prefere atendimento humano? Digite *atendente* a qualquer momento.'
+    ),
 )
 
 
-async def _enviar_boas_vindas(telefone: str) -> None:
+async def _enviar_boas_vindas(telefone: str) -> str:
     """Primeiro contato: boas-vindas (com a opção de atendente) e cardápio
-    (o PDF, ou os modelos por escrito se não houver PDF)."""
-    await enviar_whatsapp(telefone, _BOAS_VINDAS)
+    (o PDF, ou os modelos por escrito se não houver PDF).
+
+    Returns:
+        O texto de boas-vindas sorteado, para o histórico da IA.
+    """
+    boas_vindas = random.choice(_BOAS_VINDAS)
+    await enviar_whatsapp(telefone, boas_vindas)
     # Sem o rodapé de instruções: as boas-vindas logo acima já explicam
     await _enviar_cardapio(telefone, rodape=False)
+    return boas_vindas
 
 
 async def _transferir_para_humano(sessao: SessaoChat, motivo: str) -> None:
@@ -381,11 +412,11 @@ async def _handler_atendimento_llm(
 
     # Primeira mensagem da sessão — boas-vindas + cardápio
     if not sessao.historico_mensagens:
-        await _enviar_boas_vindas(sessao.telefone)
+        boas_vindas = await _enviar_boas_vindas(sessao.telefone)
         historico_inicial = [
             {
                 'role': 'assistant',
-                'content': _BOAS_VINDAS + '\n[Cardápio com os modelos e preços enviado ao cliente]',
+                'content': boas_vindas + '\n[Cardápio com os modelos e preços enviado ao cliente]',
             },
         ]
 
@@ -940,13 +971,190 @@ def _token_webhook_valido(request) -> bool:
     return False
 
 
+# ── Fila por cliente: junta mensagens seguidas e responde em segundo plano ──
+
+# Antes de responder, espera o cliente parar de escrever: quem manda "oi",
+# "quero um pod" e "tem de menta?" em sequência recebe uma resposta só.
+_JUNTAR_MENSAGENS_S = 3.5
+# Clique em lista/botão não precisa esperar tanto
+_JUNTAR_APOS_CLIQUE_S = 1.2
+# Cliente que não para de escrever recebe resposta mesmo assim
+_ESPERA_MAXIMA_S = 12
+# Depois de "ler" (tracinhos azuis), um respiro antes de começar a digitar
+_PAUSA_APOS_LER_S = (0.6, 1.6)
+
+# Palavras-chave que valem sozinhas: não entram junto com outras mensagens
+_COMANDOS_EXATOS = {
+    'atendente', 'humano', 'voltar', 'menu', 'reiniciar', 'bot', 'cardapio', 'cardápio',
+}
+
+
+@dataclass
+class _Recebida:
+    """Mensagem do cliente aguardando resposta na fila."""
+    texto: str
+    tipo: str
+    data: dict
+    instancia: str
+    chaves: list[dict] = field(default_factory=list)  # para marcar como lida
+    chegou: float = field(default_factory=time.monotonic)
+
+
+_filas: dict[str, list[_Recebida]] = {}
+_atendendo: set[str] = set()
+
+
+def _enfileirar(telefone: str, recebida: _Recebida) -> None:
+    """Põe a mensagem na fila do cliente e garante alguém atendendo a fila.
+
+    Uma fila por cliente também evita duas respostas ao mesmo tempo
+    mexendo na mesma sessão. Fica na memória: o app roda num processo só.
+    """
+    _filas.setdefault(telefone, []).append(recebida)
+    if telefone in _atendendo:
+        return
+    _atendendo.add(telefone)
+    task = asyncio.create_task(_atender_fila(telefone), name=f'atender_{telefone}')
+    _tasks_background.add(task)
+    task.add_done_callback(_tasks_background.discard)
+
+
+async def _atender_fila(telefone: str) -> None:
+    try:
+        while _filas.get(telefone):
+            await _esperar_cliente_parar(telefone)
+            for recebida in _juntar_seguidas(_filas.pop(telefone)):
+                try:
+                    await _responder(telefone, recebida)
+                except Exception:
+                    logger.exception('Erro ao responder %s', telefone)
+    finally:
+        _atendendo.discard(telefone)
+
+
+async def _esperar_cliente_parar(telefone: str) -> None:
+    """Dorme até o cliente ficar um tempo sem mandar nada (ou até o limite)."""
+    limite = _filas[telefone][0].chegou + _ESPERA_MAXIMA_S
+    while True:
+        ultima = _filas[telefone][-1]
+        janela = _JUNTAR_APOS_CLIQUE_S if ultima.tipo in ('lista', 'botao') else _JUNTAR_MENSAGENS_S
+        falta = min(ultima.chegou + janela, limite) - time.monotonic()
+        if falta <= 0:
+            return
+        await asyncio.sleep(falta)
+
+
+def _juntavel(recebida: _Recebida) -> bool:
+    return (
+        recebida.tipo in ('texto', 'audio')
+        and bool(recebida.texto)
+        and _normalizar(recebida.texto) not in _COMANDOS_EXATOS
+    )
+
+
+def _juntar_seguidas(lote: list[_Recebida]) -> list[_Recebida]:
+    """Textos (e áudios transcritos) seguidos viram uma mensagem só; cliques,
+    mídias e palavras-chave como "atendente" continuam separados."""
+    resultado: list[_Recebida] = []
+    for recebida in lote:
+        anterior = resultado[-1] if resultado else None
+        if anterior is not None and _juntavel(anterior) and _juntavel(recebida):
+            resultado[-1] = replace(
+                recebida,
+                texto=f'{anterior.texto}\n{recebida.texto}',
+                tipo='texto',
+                chaves=anterior.chaves + recebida.chaves,
+            )
+        else:
+            resultado.append(recebida)
+    return resultado
+
+
+async def _responder(telefone: str, recebida: _Recebida) -> None:
+    """Responde uma mensagem (ou várias já juntadas) do cliente."""
+    texto, tipo_interacao = recebida.texto, recebida.tipo
+    data, instancia = recebida.data, recebida.instancia
+
+    if await _bot_pausado_tratou(telefone, texto, tipo_interacao, data, instancia):
+        return
+
+    # Lê antes de responder. Com atendente humano, não: a conversa precisa
+    # continuar como não lida no celular da loja.
+    sessao = await SessaoChat.objects.filter(telefone=telefone).afirst()
+    if sessao is None or sessao.estado_atual != SessaoChat.Estado.ATENDIMENTO_HUMANO:
+        await marcar_como_lidas(instancia, recebida.chaves)
+        await asyncio.sleep(random.uniform(*_PAUSA_APOS_LER_S))
+
+    if await _loja_fechada_respondeu(telefone):
+        return
+
+    await catalogo.garantir_atualizado()
+
+    # Obtém ou cria sessão
+    sessao = await _obter_ou_criar_sessao(telefone)
+    logger.info('📋 Sessão %s — estado: %s', telefone, sessao.estado_atual)
+    em_atendimento_llm = sessao.estado_atual == SessaoChat.Estado.ATENDIMENTO_LLM
+
+    # ── Respostas interativas no atendimento LLM ──
+    if tipo_interacao == 'lista' and em_atendimento_llm:
+        await _handler_selecao_lista(sessao, texto)
+        return
+
+    if tipo_interacao == 'botao' and em_atendimento_llm:
+        await _handler_botao(sessao, texto)
+        return
+
+    # Foto no atendimento: a IA descreve e segue como se o cliente tivesse escrito
+    if tipo_interacao == 'midia' and em_atendimento_llm and texto.startswith('[imagem]'):
+        descricao = await _descrever_imagem(data, instancia)
+        if descricao:
+            legenda = texto.removeprefix('[imagem]').strip()
+            texto = f'[Cliente enviou uma foto: {descricao}] {legenda}'.strip()
+            tipo_interacao = 'texto'
+
+    # Documento (ou foto que não deu para ler) fora da etapa de pagamento
+    if tipo_interacao == 'midia' and em_atendimento_llm:
+        await enviar_whatsapp(
+            telefone,
+            'Por enquanto só consigo ler mensagens de texto 🙂 '
+            'Me diga o que deseja ou digite *atendente*.',
+        )
+        return
+
+    if tipo_interacao == 'audio' and not texto:
+        if sessao.estado_atual == SessaoChat.Estado.ATENDIMENTO_HUMANO:
+            texto = '🎤 Áudio (não foi possível transcrever)'  # o atendente ouve no WhatsApp
+        else:
+            await enviar_whatsapp(
+                telefone,
+                '😕 Não consegui ouvir seu áudio. Pode me mandar por escrito? '
+                'Se preferir, digite *atendente*.',
+            )
+            return
+
+    # Comprovante: guarda a imagem/PDF no pedido antes de o handler marcá-lo como recebido
+    if tipo_interacao == 'midia' and sessao.estado_atual == SessaoChat.Estado.AGUARDANDO_COMPROVANTE:
+        await _guardar_comprovante(telefone, data, instancia)
+
+    # Fora do atendimento LLM, botões viram palavras-chave (ex.: cancelar)
+    if tipo_interacao in ('botao', 'lista'):
+        texto = _BOTOES_PARA_TEXTO.get(texto, texto)
+
+    # ── Tratamento de texto normal via máquina de estados ──
+    handler = _HANDLERS.get(sessao.estado_atual)
+    if handler:
+        await handler(sessao, texto)
+    else:
+        logger.warning('Estado desconhecido: %s', sessao.estado_atual)
+
+
 @csrf_exempt
 @require_POST
 async def evolution_webhook(request) -> JsonResponse:
     """Endpoint principal do webhook da Evolution API.
 
-    Recebe POST com o payload da mensagem, identifica o estado
-    da sessão e roteia para o handler apropriado.
+    Recebe POST com o payload da mensagem, registra no painel e põe na
+    fila do cliente; a resposta sai em segundo plano (_responder).
     """
     if not _token_webhook_valido(request):
         return JsonResponse({'error': 'não autorizado'}, status=403)
@@ -998,70 +1206,14 @@ async def evolution_webhook(request) -> JsonResponse:
         logger.info('Cliente %s bloqueado, mensagem ignorada', telefone)
         return JsonResponse({'status': 'cliente bloqueado'})
 
-    if await _bot_pausado_tratou(telefone, texto, tipo_interacao, body.get('data', body), instancia):
-        return JsonResponse({'status': 'bot pausado'})
-
-    if await _loja_fechada_respondeu(telefone):
-        return JsonResponse({'status': 'loja fechada'})
-
-    await catalogo.garantir_atualizado()
-
-    # Obtém ou cria sessão
-    sessao = await _obter_ou_criar_sessao(telefone)
-    logger.info('📋 Sessão %s — estado: %s', telefone, sessao.estado_atual)
-    em_atendimento_llm = sessao.estado_atual == SessaoChat.Estado.ATENDIMENTO_LLM
-
-    # ── Respostas interativas no atendimento LLM ──
-    if tipo_interacao == 'lista' and em_atendimento_llm:
-        await _handler_selecao_lista(sessao, texto)
-        return JsonResponse({'status': 'ok'})
-
-    if tipo_interacao == 'botao' and em_atendimento_llm:
-        await _handler_botao(sessao, texto)
-        return JsonResponse({'status': 'ok'})
-
-    # Foto no atendimento: a IA descreve e segue como se o cliente tivesse escrito
-    if tipo_interacao == 'midia' and em_atendimento_llm and texto.startswith('[imagem]'):
-        descricao = await _descrever_imagem(body.get('data', body), instancia)
-        if descricao:
-            legenda = texto.removeprefix('[imagem]').strip()
-            texto = f'[Cliente enviou uma foto: {descricao}] {legenda}'.strip()
-            tipo_interacao = 'texto'
-
-    # Documento (ou foto que não deu para ler) fora da etapa de pagamento
-    if tipo_interacao == 'midia' and em_atendimento_llm:
-        await enviar_whatsapp(
-            telefone,
-            'Por enquanto só consigo ler mensagens de texto 🙂 '
-            'Me diga o que deseja ou digite *atendente*.',
-        )
-        return JsonResponse({'status': 'ok'})
-
-    if tipo_interacao == 'audio' and not texto:
-        if sessao.estado_atual == SessaoChat.Estado.ATENDIMENTO_HUMANO:
-            texto = texto_painel  # o atendente ouve no WhatsApp; o grupo é avisado
-        else:
-            await enviar_whatsapp(
-                telefone,
-                '😕 Não consegui ouvir seu áudio. Pode me mandar por escrito? '
-                'Se preferir, digite *atendente*.',
-            )
-            return JsonResponse({'status': 'ok'})
-
-    # Comprovante: guarda a imagem/PDF no pedido antes de o handler marcá-lo como recebido
-    if tipo_interacao == 'midia' and sessao.estado_atual == SessaoChat.Estado.AGUARDANDO_COMPROVANTE:
-        await _guardar_comprovante(telefone, body.get('data', body), instancia)
-
-    # Fora do atendimento LLM, botões viram palavras-chave (ex.: cancelar)
-    if tipo_interacao in ('botao', 'lista'):
-        texto = _BOTOES_PARA_TEXTO.get(texto, texto)
-
-    # ── Tratamento de texto normal via máquina de estados ──
-    handler = _HANDLERS.get(sessao.estado_atual)
-    if handler:
-        await handler(sessao, texto)
-    else:
-        logger.warning('Estado desconhecido: %s', sessao.estado_atual)
-
-    # Retorna 200 imediato (obrigatório para webhooks)
+    # A resposta sai em segundo plano: o webhook devolve 200 na hora
+    # (obrigatório para webhooks) e o "digitando..." pode demorar o quanto precisar
+    chave = ((body.get('data') or {}).get('key')) or {}
+    _enfileirar(telefone, _Recebida(
+        texto=texto,
+        tipo=tipo_interacao,
+        data=body.get('data', body),
+        instancia=instancia,
+        chaves=[chave],
+    ))
     return JsonResponse({'status': 'ok'})

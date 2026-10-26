@@ -37,6 +37,13 @@ X_FRAME_OPTIONS = 'DENY'
 # recusa tudo (exceto com DEBUG ligado). Gere com: python -c "import secrets; print(secrets.token_urlsafe(32))"
 WEBHOOK_TOKEN = os.getenv('WEBHOOK_TOKEN', '')
 
+# Notificações no celular (Web Push). Gere o par com: python manage.py gerar_chaves_push
+# Sem as chaves, o painel só esconde o botão de ativar e o serviço `notificacoes` fica parado.
+VAPID_PUBLIC_KEY = os.getenv('VAPID_PUBLIC_KEY', '')
+VAPID_PRIVATE_KEY = os.getenv('VAPID_PRIVATE_KEY', '')
+# Contato do dono do painel exigido pela Apple/Google (mailto:email ou https://...)
+VAPID_CONTATO = os.getenv('VAPID_CONTATO', '') or os.getenv('PAINEL_URL', '')
+
 # Login do painel/admin: bloqueia por 15 min depois de 5 senhas erradas
 # seguidas para o mesmo usuário ou IP
 LOGIN_TENTATIVAS_MAXIMAS = int(os.getenv('LOGIN_TENTATIVAS_MAXIMAS', '5'))

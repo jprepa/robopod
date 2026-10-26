@@ -400,3 +400,28 @@ class RespostaRapida(models.Model):
 
     def __str__(self):
         return f'/{self.atalho} ({self.titulo})'
+
+
+class InscricaoPush(models.Model):
+    """Celular ou navegador que ativou as notificações do painel (Web Push).
+
+    Os dados vêm do navegador (`pushManager.subscribe`). O serviço `notificacoes`
+    do docker-compose manda os avisos para cá; o endpoint some sozinho quando o
+    aparelho desinstala o app ou revoga a permissão.
+    """
+
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='+')
+    endpoint = models.URLField(max_length=1000, unique=True)
+    p256dh = models.CharField(max_length=200)
+    auth = models.CharField(max_length=100)
+    eventos = models.JSONField(default=list, blank=True, help_text='Eventos que este aparelho quer receber')
+    aparelho = models.CharField(max_length=60, blank=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+    ultimo_envio = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = 'Inscrição em notificações'
+        verbose_name_plural = 'Inscrições em notificações'
+
+    def __str__(self):
+        return f'{self.usuario} · {self.aparelho or "aparelho"}'

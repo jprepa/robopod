@@ -1,8 +1,8 @@
 from django.contrib import admin
 
 from .models import (
-    Categoria, Cliente, Configuracao, ItemPedido, Mensagem, Pedido, Produto, RegistroAuditoria,
-    Variante,
+    Categoria, Cliente, Configuracao, InscricaoPush, ItemPedido, Mensagem, Pedido, Produto,
+    RegistroAuditoria, Variante,
 )
 
 admin.site.register(Configuracao)
@@ -69,3 +69,10 @@ class RegistroAuditoriaAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(InscricaoPush)
+class InscricaoPushAdmin(admin.ModelAdmin):
+    list_display = ('usuario', 'aparelho', 'criado_em', 'ultimo_envio')
+    list_filter = ('aparelho',)
+    readonly_fields = ('endpoint', 'p256dh', 'auth', 'criado_em', 'ultimo_envio')
