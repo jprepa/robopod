@@ -1,7 +1,7 @@
 from django.contrib.auth import views as auth_views
 from django.urls import path
 
-from . import views
+from . import pwa, views
 from .autenticacao import FormularioLogin
 
 app_name = 'painel'
@@ -16,6 +16,10 @@ urlpatterns = [
     ), name='login'),
     path('sair/', auth_views.LogoutView.as_view(), name='logout'),
     path('contadores/', views.contadores, name='contadores'),
+
+    path('manifest.webmanifest', pwa.manifest, name='pwa_manifest'),
+    path('sw.js', pwa.service_worker, name='pwa_service_worker'),
+    path('icones/<str:nome>.png', pwa.icone, name='pwa_icone'),
 
     path('conversas/', views.conversas, name='conversas'),
     path('conversas/<str:telefone>/', views.conversa, name='conversa'),

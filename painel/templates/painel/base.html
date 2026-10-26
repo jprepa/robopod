@@ -2,7 +2,7 @@
 <html lang="pt-br">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+{% include "painel/parciais/pwa_head.html" %}
 <title>{% block titulo %}Painel{% endblock %} · Robopod</title>
 <style>
 :root {
@@ -54,6 +54,8 @@ body {
   background: var(--bg); color: var(--text);
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   display: grid; grid-template-columns: 220px 1fr; min-height: 100vh;
+  /* Instalado como app no iPhone: desvia do notch (deitado) e da barra de início */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -86,7 +88,7 @@ h2 { font-size: 15px; margin: 0 0 12px; font-weight: 650; }
 .lateral .rodape button { all: unset; cursor: pointer; color: var(--accent); }
 .lateral .rodape button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 .lateral .rodape #botao-som { display: block; margin: 6px 0; color: var(--text-2); }
-main { padding: 24px 28px 48px; min-width: 0; }
+main { padding: 24px 28px calc(48px + env(safe-area-inset-bottom)); min-width: 0; }
 .topo { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
 .cartao { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
 .grade { display: grid; gap: 16px; }
@@ -152,7 +154,7 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
   .nav { display: flex; gap: 2px; }
   .lateral .rodape { margin: 0 0 0 auto; white-space: nowrap; display: flex; gap: 12px; align-items: center; }
   .lateral .rodape .usuario { display: none; }
-  main { padding: 16px 16px 40px; }
+  main { padding: 16px 16px calc(40px + env(safe-area-inset-bottom)); }
   /* 16px evita o zoom automático do iPhone ao tocar num campo */
   input[type=text], input[type=search], input[type=number], input[type=url], input[type=password], select, textarea { font-size: 16px; }
   .g-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }

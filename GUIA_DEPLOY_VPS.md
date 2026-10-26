@@ -151,6 +151,13 @@ tailscale serve status
 Com o Tailscale ligado no celular ou no PC, abra `https://robopod.SEU-TAILNET.ts.net/painel/`.
 O QR Code da Evolution fica em `https://robopod.SEU-TAILNET.ts.net:8443/manager`.
 
+**Painel como app no celular:** no iPhone, abra o painel no **Safari**, toque em
+Compartilhar → **Adicionar à Tela de Início**. O ícone do Robopod abre o painel em tela
+cheia, sem a barra do navegador. No Android, use o menu do Chrome → **Instalar app**.
+O app tem o próprio login (faça uma vez dentro dele) e precisa do Tailscale ligado; se o
+Tailscale estiver desligado, aparece um aviso com o botão "Tentar de novo". Atalhos criados
+antes desta versão continuam abrindo como site: apague e adicione de novo.
+
 Se o login der **erro 403 (CSRF)**, o `CSRF_TRUSTED_ORIGINS` não bate com o endereço do
 navegador (precisa de `https://` e nenhuma barra no fim). Corrija o `.env` e rode
 `docker compose up -d app`.
