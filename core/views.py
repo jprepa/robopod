@@ -474,7 +474,8 @@ async def _handler_atendimento_llm(
             f"📝 *Confere seu pedido:*\n\n"
             f"{resumo}\n\n"
             f"🛍️ Subtotal: *{formatar_preco(subtotal)}*\n\n"
-            f"_Confirma o pedido?_",
+            f"➕ Quer *adicionar mais algum item*? É só me dizer agora o modelo e o sabor.\n\n"
+            f"✅ Se estiver tudo certo, responda *sim* para seguir para o endereço.",
         )
 
     elif resultado.tipo == 'fechar_pedido':
