@@ -17,6 +17,9 @@
 .msg.atendente .balao { background: var(--bubble-atendente); }
 .msg.falhou .balao { border-color: var(--bad); }
 .msg code { font-size: 12px; background: var(--surface-2); padding: 1px 4px; border-radius: 4px; }
+.msg .anexo { display: block; margin: -4px -7px; }
+.msg .anexo img { display: block; max-width: min(320px, 100%); max-height: 360px; min-height: 60px; object-fit: contain; border-radius: 8px; background: #0002; }
+.msg .legenda { margin-top: 10px; }
 .responder { border-top: 1px solid var(--border); padding: 10px; display: grid; gap: 8px; background: var(--surface); }
 .responder form { display: flex; gap: 8px; align-items: flex-end; }
 .responder textarea { resize: none; min-height: 40px; max-height: 160px; }
@@ -117,7 +120,7 @@
         <input type="hidden" name="status" value="{{ p.proximo }}">
         {% if p.origem != 'manual' %}<input type="hidden" name="avisar" value="1">{% endif %}
         <input type="hidden" name="voltar" value="{{ request.get_full_path }}">
-        <span><a href="{% url 'painel:pedido' p.pk %}">Pedido #{{ p.pk }}</a> · {{ p.total|brl }} <span class="tag {{ p.status }}">{{ p.get_status_display }}</span></span>
+        <span><a href="{% url 'painel:pedido' p.pk %}">Pedido #{{ p.pk }}</a> · {{ p.total|brl }} <span class="tag {{ p.status }}">{{ p.get_status_display }}</span>{% if p.comprovante %} · <a href="{% url 'painel:pedido_comprovante' p.pk %}" target="_blank" rel="noopener" title="Abrir o comprovante enviado pelo cliente">🧾 Ver comprovante</a>{% endif %}</span>
         <button class="btn primario peq" type="submit" title="{% if p.origem == 'manual' %}Muda o status{% else %}Muda o status e avisa o cliente no WhatsApp{% endif %}">→ {{ p.proximo_rotulo }}</button>
       </form>
       {% endif %}{% endfor %}
@@ -203,6 +206,10 @@
   const noFim = () => caixa.scrollHeight - caixa.scrollTop - caixa.clientHeight < 80;
   const rolarFim = () => { caixa.scrollTop = caixa.scrollHeight; };
   rolarFim();
+  // Foto que termina de carregar empurra o chat: segue no fim se já estava lá
+  let colado = true;
+  caixa.addEventListener('scroll', () => { colado = noFim(); });
+  caixa.addEventListener('load', (ev) => { if (ev.target.tagName === 'IMG' && colado) rolarFim(); }, true);
 
   async function buscarNovas() {
     if (buscando) return;

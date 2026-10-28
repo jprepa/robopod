@@ -6,6 +6,7 @@ com base no estado atual da sessão.
 """
 
 import asyncio
+import base64
 import hmac
 import json
 import logging
@@ -1196,10 +1197,22 @@ async def evolution_webhook(request) -> JsonResponse:
         texto_painel = f'🎤 Áudio: {texto}' if texto else '🎤 Áudio (não foi possível transcrever)'
     logger.info('📩 Mensagem de %s [%s]: %s', telefone, tipo_interacao, texto_painel[:100])
 
+    # Foto/PDF: baixa já, para o atendente ver no balão da conversa. O base64
+    # volta para o payload: comprovante e descrição pela IA não baixam de novo.
+    midia = None
+    if tipo_interacao == 'midia':
+        dados_msg = body.get('data', body)
+        midia = await baixar_midia(dados_msg, instancia)
+        mensagem = dados_msg.get('message')
+        if midia is not None and isinstance(mensagem, dict) and not mensagem.get('base64'):
+            mensagem['base64'] = base64.b64encode(midia[0]).decode()
+
     # Histórico e cadastro do cliente para o painel
     nome_whatsapp = (body.get('data') or {}).get('pushName') or ''
     try:
-        cliente = await servicos.registrar_mensagem_cliente(telefone, texto_painel, nome_whatsapp, loja.pk)
+        cliente = await servicos.registrar_mensagem_cliente(
+            telefone, texto_painel, nome_whatsapp, loja.pk, midia=midia,
+        )
     except Exception:
         logger.exception('Falha ao registrar mensagem de %s', telefone)
         cliente = None

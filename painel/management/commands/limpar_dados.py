@@ -9,7 +9,8 @@ serviço `limpeza` do docker-compose).
   endereço depois de 30 dias, mesmo que o status tenha ficado esquecido.
 - Comprovante que tenha sobrado em pedido pago, entregue ou cancelado.
 - Histórico das conversas mais antigo que RETENCAO_MENSAGENS_DIAS: mensagens do
-  painel, contexto da IA nas sessões paradas e mensagens guardadas pela Evolution.
+  painel (com as fotos/PDFs enviados), contexto da IA nas sessões paradas e
+  mensagens guardadas pela Evolution.
 
 O telefone e o nome do cliente ficam: são o que identifica o cliente.
 """
@@ -46,9 +47,7 @@ class Command(BaseCommand):
 
         self._relatar('endereços de pedidos', self._limpar_enderecos(agora, limite_endereco))
         self._relatar('comprovantes', self._limpar_comprovantes())
-        self._relatar('mensagens do painel', self._apagar(
-            Mensagem.objects.filter(criado_em__lt=limite_mensagens),
-        ))
+        self._relatar('mensagens do painel', self._limpar_mensagens(limite_mensagens))
         self._relatar('históricos da IA', self._limpar_sessoes(limite_mensagens))
         self._relatar('mensagens da Evolution', self._limpar_evolution(limite_mensagens))
 
@@ -60,10 +59,14 @@ class Command(BaseCommand):
         if quantidade and not self.simular:
             logger.info('limpar_dados: %s %s apagados', quantidade, o_que)
 
-    def _apagar(self, queryset) -> int:
-        quantidade = queryset.count()
+    def _limpar_mensagens(self, limite) -> int:
+        """Mensagens antigas, junto com as fotos/PDFs que os clientes mandaram."""
+        antigas = Mensagem.objects.filter(criado_em__lt=limite)
+        quantidade = antigas.count()
         if quantidade and not self.simular:
-            queryset.delete()
+            for mensagem in antigas.exclude(midia=''):
+                mensagem.midia.delete(save=False)
+            antigas.delete()
         return quantidade
 
     def _limpar_enderecos(self, agora, limite) -> int:

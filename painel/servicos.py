@@ -22,9 +22,13 @@ logger = logging.getLogger(__name__)
 
 async def registrar_mensagem_cliente(
     telefone: str, texto: str, nome_whatsapp: str = '', loja_id: int | None = None,
+    midia: tuple[bytes, str] | None = None,
 ) -> Cliente:
     """Salva a mensagem recebida e cria/atualiza o cliente. A loja por onde a
-    mensagem chegou vira a loja atual do cliente (as respostas saem por ela)."""
+    mensagem chegou vira a loja atual do cliente (as respostas saem por ela).
+
+    `midia` (conteúdo, mimetype) é a foto/PDF que o atendente vê no balão.
+    """
     agora = timezone.now()
     cliente, criado = await Cliente.objects.aget_or_create(
         telefone=telefone,
@@ -38,8 +42,16 @@ async def registrar_mensagem_cliente(
         if cliente.loja_origem_id is None:
             campos['loja_origem_id'] = cliente.loja_origem_id = loja_id
     await Cliente.objects.filter(pk=cliente.pk).aupdate(**campos)
+    arquivo = None
+    if midia is not None:
+        conteudo, mimetype = midia
+        # Só tipos que o navegador mostra com segurança (nada de HTML/SVG)
+        extensao = _EXTENSOES_MIDIA.get(mimetype)
+        if conteudo and extensao:
+            arquivo = ContentFile(conteudo, name=f'{telefone}-{agora:%Y%m%d%H%M%S}.{extensao}')
     await Mensagem.objects.acreate(
-        telefone=telefone, loja_id=loja_id, autor=Mensagem.Autor.CLIENTE, texto=texto, criado_em=agora,
+        telefone=telefone, loja_id=loja_id, autor=Mensagem.Autor.CLIENTE, texto=texto,
+        midia=arquivo or '', criado_em=agora,
     )
     return cliente
 
@@ -243,14 +255,14 @@ async def cancelar_pedido_cliente(pedido_id: int | None) -> None:
     )
 
 
-_EXTENSOES_COMPROVANTE = {
+_EXTENSOES_MIDIA = {
     'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'application/pdf': 'pdf',
 }
 
 
 async def salvar_comprovante(pedido_id: int | None, conteudo: bytes, mimetype: str) -> None:
     """Guarda a imagem/PDF do comprovante no pedido, para o operador conferir no painel."""
-    extensao = _EXTENSOES_COMPROVANTE.get(mimetype)
+    extensao = _EXTENSOES_MIDIA.get(mimetype)
     if not pedido_id or not conteudo or not extensao:
         return
     pedido = await Pedido.objects.filter(pk=pedido_id).afirst()

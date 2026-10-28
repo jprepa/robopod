@@ -1,6 +1,10 @@
 {% load painel_tags %}{% for m in mensagens %}
 <div class="msg {{ m.autor }}{% if not m.enviada %} falhou{% endif %}" data-id="{{ m.pk }}">
-  <div class="balao">{{ m.texto|whatsapp }}</div>
+  {% if m.midia %}<div class="balao">
+    {% if m.midia_eh_pdf %}<a class="anexo-pdf" href="{% url 'painel:mensagem_midia' m.pk %}" target="_blank" rel="noopener">📄 Abrir PDF ↗</a>
+    {% else %}<a class="anexo" href="{% url 'painel:mensagem_midia' m.pk %}" target="_blank" rel="noopener" title="Abrir em tamanho real"><img src="{% url 'painel:mensagem_midia' m.pk %}" alt="Imagem enviada pelo cliente" loading="lazy"></a>{% endif %}
+    {% if m.legenda %}<div class="legenda">{{ m.legenda|whatsapp }}</div>{% endif %}
+  </div>{% else %}<div class="balao">{{ m.texto|whatsapp }}</div>{% endif %}
   <div class="meta">{% if m.autor == 'bot' %}Bot · {% elif m.autor == 'atendente' %}Atendente · {% endif %}{{ m.criado_em|date:"d/m H:i" }}{% if not m.enviada %} · não enviada{% endif %}</div>
 </div>
 {% endfor %}

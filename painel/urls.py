@@ -29,6 +29,7 @@ urlpatterns = [
     path('conversas/<str:telefone>/responder/', views.conversa_responder, name='conversa_responder'),
     path('conversas/<str:telefone>/assumir/', views.conversa_assumir, name='conversa_assumir'),
     path('conversas/<str:telefone>/devolver/', views.conversa_devolver, name='conversa_devolver'),
+    path('mensagens/<int:pk>/midia/', views.mensagem_midia, name='mensagem_midia'),
 
     path('clientes/', views.clientes, name='clientes'),
     path('clientes/<int:pk>/', views.cliente, name='cliente'),

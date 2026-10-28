@@ -309,6 +309,10 @@ class Mensagem(models.Model):
     )
     autor = models.CharField(max_length=10, choices=Autor.choices)
     texto = models.TextField()
+    midia = models.FileField(
+        upload_to='conversas/', blank=True,
+        help_text='Foto ou PDF enviado pelo cliente, para o atendente ver no painel',
+    )
     enviada = models.BooleanField(default=True, help_text='Falso se o envio pela Evolution falhou')
     criado_em = models.DateTimeField(default=timezone.now, db_index=True)
 
@@ -318,6 +322,19 @@ class Mensagem(models.Model):
 
     def __str__(self):
         return f'{self.telefone} [{self.autor}] {self.texto[:40]}'
+
+    @property
+    def midia_eh_pdf(self) -> bool:
+        return self.midia.name.lower().endswith('.pdf')
+
+    @property
+    def legenda(self) -> str:
+        """Texto sem o rótulo "[imagem]"/"[documento]", que sobra quando a
+        mídia em si aparece no balão."""
+        for rotulo in ('[imagem]', '[documento]'):
+            if self.texto.startswith(rotulo):
+                return self.texto.removeprefix(rotulo).strip()
+        return self.texto
 
 
 class RegistroAuditoria(models.Model):

@@ -914,6 +914,22 @@ def pedidos(request):
 
 
 @login_required
+def mensagem_midia(request, pk: int):
+    """Foto/PDF enviado pelo cliente na conversa, servido só a quem está logado."""
+    obj = get_object_or_404(Mensagem, pk=pk)
+    if not obj.midia:
+        raise Http404
+    try:
+        arquivo = obj.midia.open('rb')
+    except FileNotFoundError:
+        raise Http404
+    resposta = FileResponse(arquivo, content_type=mimetypes.guess_type(obj.midia.name)[0] or 'application/octet-stream')
+    resposta['Content-Disposition'] = f'inline; filename="{os.path.basename(obj.midia.name)}"'
+    resposta['Cache-Control'] = 'private, max-age=3600'
+    return resposta
+
+
+@login_required
 def pedido(request, pk: int):
     obj = get_object_or_404(Pedido.objects.select_related('cliente').prefetch_related('itens'), pk=pk)
     obj.proximo = _PROXIMO_STATUS.get(obj.status)
