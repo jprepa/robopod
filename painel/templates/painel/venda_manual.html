@@ -20,7 +20,7 @@ input[type=tel], input[type=datetime-local] {
 {% block conteudo %}
 <div class="topo">
   <h1>Venda manual</h1>
-  <a class="btn" href="{% url 'painel:pedidos' %}">← Pedidos</a>
+  {% if operador %}<a class="btn" href="{% url 'painel:estoque' %}">← Estoque</a>{% else %}<a class="btn" href="{% url 'painel:pedidos' %}">← Pedidos</a>{% endif %}
 </div>
 <p class="muted" style="margin:-8px 0 16px">Para vendas feitas fora do bot (balcão, ligação, WhatsApp pessoal). Os itens saem do estoque e a venda entra no dashboard. Cancelar o pedido depois devolve o estoque.</p>
 

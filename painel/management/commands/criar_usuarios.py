@@ -3,6 +3,7 @@
     python manage.py criar_usuarios                 # cria os que ainda não existem
     python manage.py criar_usuarios --redefinir     # gera nova senha para os que já existem
     python manage.py criar_usuarios --superusuario  # também libera a aba Auditoria
+    python manage.py criar_usuarios --operador Maria Silva  # cria um Operador (Conversas, Estoque e Configurações)
 
 Usuário de acesso: nome.sobrenome em minúsculas (ex.: gustavo.beozzo).
 """
@@ -10,7 +11,10 @@ Usuário de acesso: nome.sobrenome em minúsculas (ex.: gustavo.beozzo).
 import secrets
 
 from django.contrib.auth import get_user_model
-from django.core.management.base import BaseCommand
+from django.contrib.auth.models import Group
+from django.core.management.base import BaseCommand, CommandError
+
+from painel.permissoes import GRUPO_OPERADOR
 
 PESSOAS = [
     ('Gustavo', 'Beozzo'),
@@ -31,11 +35,18 @@ class Command(BaseCommand):
             '--superusuario', action='store_true',
             help='Cria como superusuário (acessa Auditoria e o /admin)',
         )
+        parser.add_argument(
+            '--operador', nargs=2, metavar=('NOME', 'SOBRENOME'),
+            help='Cria só esta pessoa, no perfil Operador, em vez da equipe',
+        )
 
     def handle(self, *args, **opts):
         User = get_user_model()
         credenciais = []
-        for nome, sobrenome in PESSOAS:
+        if opts['operador'] and opts['superusuario']:
+            raise CommandError('Use --operador ou --superusuario, não os dois.')
+        pessoas = [tuple(opts['operador'])] if opts['operador'] else PESSOAS
+        for nome, sobrenome in pessoas:
             login = f'{nome}.{sobrenome}'.lower()
             usuario = User.objects.filter(username=login).first()
             if usuario and not opts['redefinir']:
@@ -49,6 +60,8 @@ class Command(BaseCommand):
                 usuario.is_staff = usuario.is_superuser = True
             usuario.set_password(senha)
             usuario.save()
+            if opts['operador']:
+                usuario.groups.add(Group.objects.get_or_create(name=GRUPO_OPERADOR)[0])
             credenciais.append((login, senha))
 
         if credenciais:

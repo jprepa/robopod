@@ -4,7 +4,7 @@
 {% block conteudo %}
 <div class="topo">
   <h1>Pedido #{{ pedido.pk }} <span class="tag {{ pedido.status }}" style="vertical-align:middle">{{ pedido.get_status_display }}</span>{% if pedido.origem == 'manual' %} <span class="tag manual" style="vertical-align:middle">venda manual</span>{% endif %}{% if lojas_ativas|length > 1 and pedido.loja %} <span class="tag" style="vertical-align:middle" title="Número por onde o pedido foi feito">{{ pedido.loja.nome }}</span>{% endif %}</h1>
-  <a class="btn" href="{% url 'painel:pedidos' %}">← Pedidos</a>
+  {% if operador %}<a class="btn" href="{% url 'painel:conversas' %}">← Conversas</a>{% else %}<a class="btn" href="{% url 'painel:pedidos' %}">← Pedidos</a>{% endif %}
 </div>
 <div class="grade g-3-1">
   <div class="grade" style="align-content:start">
@@ -44,7 +44,7 @@
     <section class="cartao">
       <h2>Cliente</h2>
       {% if pedido.cliente %}
-      <div><a href="{% url 'painel:cliente' pedido.cliente.pk %}">{{ pedido.cliente.nome_exibicao }}</a></div>
+      <div>{% if operador %}{{ pedido.cliente.nome_exibicao }}{% else %}<a href="{% url 'painel:cliente' pedido.cliente.pk %}">{{ pedido.cliente.nome_exibicao }}</a>{% endif %}</div>
       <div class="muted">{{ pedido.cliente.telefone|telefone }}</div>
       <div style="margin-top:10px"><a class="btn peq" href="{% url 'painel:conversa' pedido.cliente.telefone %}">Abrir conversa</a></div>
       {% else %}

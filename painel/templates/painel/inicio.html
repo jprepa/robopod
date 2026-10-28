@@ -162,9 +162,11 @@ td.cli .itens { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
   </details>
 </section>
 
+{% if not operador %}
 <div id="painel-inicio" hx-get="{% url 'painel:inicio' %}" hx-trigger="every 20s" hx-swap="innerHTML">
   {% include 'painel/parciais/inicio_painel.html' %}
 </div>
+{% endif %}
 {% endblock %}
 
 {% block script %}

@@ -39,6 +39,7 @@ from .models import (
     RegistroAuditoria,
     RespostaRapida, Variante,
 )
+from .permissoes import eh_operador, fora_do_operador
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +310,12 @@ def _contexto_inicio() -> dict:
 
 @login_required
 def inicio(request):
+    if eh_operador(request.user):
+        agora = timezone.now()
+        return _render(request, 'painel/inicio.html', {
+            'secao': 'inicio', 'config': Configuracao.obter(), 'saudacao': _saudacao(agora), 'agora': agora,
+            'mensagem_padrao': MENSAGEM_FECHADO_PADRAO,
+        })
     contexto = _contexto_inicio()
     # Atualização automática (HTMX) só do miolo: o formulário do expediente fica intacto
     if request.headers.get('HX-Request'):
@@ -376,6 +383,7 @@ def expediente(request):
 
 
 @login_required
+@fora_do_operador
 def dashboard(request):
     try:
         dias = int(request.GET.get('dias', 30))
@@ -784,6 +792,7 @@ def conversa_devolver(request, telefone: str):
 
 
 @login_required
+@fora_do_operador
 def clientes(request):
     busca = request.GET.get('q', '').strip()
     ordem = request.GET.get('ordem', 'recentes')
@@ -828,6 +837,7 @@ def clientes(request):
 
 
 @login_required
+@fora_do_operador
 def cliente(request, pk: int):
     obj = get_object_or_404(Cliente, pk=pk)
     if request.method == 'POST':
@@ -885,6 +895,7 @@ _PROXIMO_STATUS = {
 
 
 @login_required
+@fora_do_operador
 def pedidos(request):
     status = request.GET.get('status', '')
     busca = request.GET.get('q', '').strip()
@@ -961,7 +972,7 @@ def pedido_status(request, pk: int):
     obj = get_object_or_404(Pedido.objects.select_related('cliente'), pk=pk)
     novo = request.POST.get('status', '')
     if novo not in Pedido.Status.values or novo == obj.status:
-        return redirect(request.POST.get('voltar') or 'painel:pedidos')
+        return _voltar_do_status(request, obj)
 
     anterior = obj.get_status_display()
     servicos.mudar_status(obj, novo)
@@ -987,7 +998,16 @@ def pedido_status(request, pk: int):
         if sessao and sessao.carrinho_temporario.get('pedido_id') == obj.pk:
             sessao.resetar_sessao()
             sessao.save()
-    return redirect(request.POST.get('voltar') or 'painel:pedidos')
+    return _voltar_do_status(request, obj)
+
+
+def _voltar_do_status(request, obj: Pedido):
+    if request.POST.get('voltar'):
+        return redirect(request.POST['voltar'])
+    # O operador não tem a lista de pedidos: fica no próprio pedido
+    if eh_operador(request.user):
+        return redirect('painel:pedido', pk=obj.pk)
+    return redirect('painel:pedidos')
 
 
 # Status possíveis ao lançar uma venda manual (o primeiro é o padrão)
@@ -1327,7 +1347,10 @@ def configuracoes(request):
             return redirect('painel:configuracoes')
 
         if 'cardapio_pdf' in request.POST or 'cardapio_pdf' in request.FILES:
-            _salvar_cardapio_pdf(request, config)
+            if eh_operador(request.user):
+                messages.error(request, 'Seu acesso não permite trocar o PDF do cardápio.')
+            else:
+                _salvar_cardapio_pdf(request, config)
             return redirect('painel:configuracoes')
 
         campos_aviso = {

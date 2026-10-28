@@ -54,6 +54,9 @@
     {% else %}
       <p class="muted">Nenhum PDF carregado: o bot manda só o cardápio em texto.</p>
     {% endif %}
+    {% if operador %}
+      <p class="muted">Só os administradores trocam o PDF.</p>
+    {% else %}
     <form method="post" enctype="multipart/form-data" class="grade" style="gap:10px">
       {% csrf_token %}
       <input type="file" name="cardapio_pdf" accept="application/pdf,.pdf" required>
@@ -62,6 +65,7 @@
         {% if config.cardapio_pdf %}<button class="btn" type="submit" name="cardapio_pdf" value="remover" formnovalidate>Remover</button>{% endif %}
       </div>
     </form>
+    {% endif %}
   </section>
   {% if user.is_superuser %}
   <section class="cartao">

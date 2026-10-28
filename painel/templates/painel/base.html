@@ -175,11 +175,13 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px sol
     <a href="{% url 'painel:inicio' %}" class="{% if secao == 'inicio' %}ativo{% endif %}">Início</a>
     <a href="{% url 'painel:conversas' %}" class="{% if secao == 'conversas' %}ativo{% endif %}">Conversas
       <span class="badge" id="badge-atendente" data-n="{{ contadores.aguardando_atendente }}" title="Aguardando atendente">{{ contadores.aguardando_atendente }}</span></a>
+    {% if not operador %}
     <a href="{% url 'painel:pedidos' %}" class="{% if secao == 'pedidos' %}ativo{% endif %}">Pedidos
       <span class="badge" id="badge-pedidos" data-n="{{ contadores.pedidos_conferir }}" title="Comprovantes a conferir">{{ contadores.pedidos_conferir }}</span></a>
     <a href="{% url 'painel:estoque' %}" class="{% if secao == 'estoque' %}ativo{% endif %}">Estoque</a>
     <a href="{% url 'painel:clientes' %}" class="{% if secao == 'clientes' %}ativo{% endif %}">Clientes</a>
     <a href="{% url 'painel:dashboard' %}" class="{% if secao == 'dashboard' %}ativo{% endif %}">Dashboard</a>
+    {% endif %}
     {% if user.is_superuser %}<a href="{% url 'painel:auditoria' %}" class="{% if secao == 'auditoria' %}ativo{% endif %}">Auditoria</a>{% endif %}
     <a href="{% url 'painel:configuracoes' %}" class="{% if secao == 'configuracoes' %}ativo{% endif %}">Configurações</a>
   </nav>
