@@ -394,6 +394,32 @@ async def notificar_equipe(
         return False
 
 
+async def responder_no_grupo(grupo_id: str, mensagem: str, citar: dict | None = None) -> bool:
+    """Responde no grupo da equipe pela loja principal, citando a mensagem
+    recebida (`citar` = o `data` do webhook) para ficar claro a quem é a resposta."""
+    payload = {'number': grupo_id, 'text': mensagem}
+    if citar and (citar.get('key') or {}).get('id'):
+        payload['quoted'] = {'key': citar['key'], 'message': citar.get('message') or {}}
+    url = _evo_url('sendText', await instancia_principal())
+    try:
+        await _post_com_retry(url, json=payload, headers=_evo_headers(), label='Resposta no grupo da equipe')
+        return True
+    except Exception:
+        if 'quoted' not in payload:
+            logger.exception('Falha ao responder no grupo da equipe')
+            return False
+    # A Evolution recusou a citação: manda sem ela
+    payload.pop('quoted')
+    try:
+        await _post_com_retry(
+            url, json=payload, headers=_evo_headers(), max_tentativas=1, label='Resposta no grupo da equipe',
+        )
+        return True
+    except Exception:
+        logger.exception('Falha ao responder no grupo da equipe')
+        return False
+
+
 async def listar_grupos_whatsapp(timeout: float = 10) -> list[dict]:
     """Grupos dos quais o WhatsApp da loja participa: [{'id', 'nome', 'participantes'}].
 

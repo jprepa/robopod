@@ -1,8 +1,8 @@
 from django.contrib import admin
 
 from .models import (
-    Categoria, Cliente, Configuracao, InscricaoPush, ItemPedido, Mensagem, Pedido, Produto,
-    RegistroAuditoria, Variante,
+    Categoria, Cliente, Configuracao, InscricaoPush, ItemPedido, Mensagem, Pedido, PerfilEquipe, Produto,
+    RegistroAuditoria, Revendedor, Variante,
 )
 
 admin.site.register(Configuracao)
@@ -40,10 +40,23 @@ class ItemPedidoInline(admin.TabularInline):
 
 @admin.register(Pedido)
 class PedidoAdmin(admin.ModelAdmin):
-    list_display = ('id', 'cliente', 'origem', 'status', 'total', 'criado_em')
+    list_display = ('id', 'cliente', 'revendedor', 'origem', 'status', 'total', 'criado_em')
     list_filter = ('status', 'origem')
     search_fields = ('cliente__telefone', 'cliente__nome')
     inlines = [ItemPedidoInline]
+
+
+@admin.register(Revendedor)
+class RevendedorAdmin(admin.ModelAdmin):
+    list_display = ('nome', 'telefone', 'ativo')
+    list_filter = ('ativo',)
+    search_fields = ('nome', 'telefone')
+
+
+@admin.register(PerfilEquipe)
+class PerfilEquipeAdmin(admin.ModelAdmin):
+    list_display = ('usuario', 'whatsapp')
+    search_fields = ('usuario__username', 'whatsapp')
 
 
 @admin.register(Mensagem)

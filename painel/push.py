@@ -136,8 +136,8 @@ class Verificador:
 
     def _estado(self) -> dict:
         recentes = timezone.now() - timedelta(days=2)
-        # Vendas lançadas à mão no painel não notificam: quem lançou já sabe
-        pedidos = Pedido.objects.exclude(origem=Pedido.Origem.MANUAL)
+        # Vendas lançadas à mão no painel ou no grupo não notificam: quem lançou já sabe
+        pedidos = Pedido.objects.filter(origem=Pedido.Origem.WHATSAPP)
         ids_com_status = lambda s: set(  # noqa: E731
             pedidos.filter(status=s, atualizado_em__gte=recentes).values_list('pk', flat=True))
         ultimo = lambda qs: qs.order_by('-pk').values_list('pk', flat=True).first() or 0  # noqa: E731
@@ -162,7 +162,7 @@ class Verificador:
         ids = {
             'pago': atual['pago'] - antes['pago'],
             'comprovante': atual['comprovante'] - antes['comprovante'],
-            'pedido': set(Pedido.objects.exclude(origem=Pedido.Origem.MANUAL).filter(
+            'pedido': set(Pedido.objects.filter(origem=Pedido.Origem.WHATSAPP).filter(
                 pk__gt=antes['pedido']).values_list('pk', flat=True)),
         }
         ja_avisados = set()

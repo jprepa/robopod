@@ -19,6 +19,7 @@ from django.db.models import Count, F, Max, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.template.loader import render_to_string
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -33,11 +34,10 @@ from core.notificacoes import (
 
 from . import auditoria, catalogo, push, servicos
 from .auditoria import Tipo
-from .forms import CategoriaForm, ClienteForm, ProdutoForm, RespostaRapidaForm, VarianteFormSet
+from .forms import CategoriaForm, ClienteForm, ProdutoForm, RespostaRapidaForm, RevendedorForm, VarianteFormSet
 from .models import (
-    MENSAGEM_FECHADO_PADRAO, Categoria, Cliente, Configuracao, ItemPedido, Loja, Mensagem, Pedido, Produto,
-    RegistroAuditoria,
-    RespostaRapida, Variante,
+    MENSAGEM_FECHADO_PADRAO, Categoria, Cliente, Configuracao, ItemPedido, Loja, Mensagem, Pedido, PerfilEquipe,
+    Produto, RegistroAuditoria, RespostaRapida, Revendedor, Variante,
 )
 from .permissoes import eh_operador, fora_do_operador
 
@@ -101,8 +101,8 @@ def _marcas_alerta() -> dict:
     em_humano = SessaoChat.objects.filter(
         estado_atual=SessaoChat.Estado.ATENDIMENTO_HUMANO,
     ).values('telefone')
-    # Vendas lançadas à mão no painel não tocam som: quem lançou já sabe
-    pedidos_bot = Pedido.objects.exclude(origem=Pedido.Origem.MANUAL)
+    # Vendas lançadas à mão no painel ou no grupo não tocam som: quem lançou já sabe
+    pedidos_bot = Pedido.objects.filter(origem=Pedido.Origem.WHATSAPP)
     return {
         'mensagem': msgs_cliente.aggregate(m=Max('id'))['m'] or 0,
         'mensagem_humano': msgs_cliente.filter(telefone__in=em_humano).aggregate(m=Max('id'))['m'] or 0,
@@ -487,8 +487,10 @@ def _vendas_por_vendedor(vendas, total_periodo: Decimal) -> list[dict]:
         if v['vendedor_id']:
             chave = v['vendedor_id']
             nome = f"{v['vendedor__first_name']} {v['vendedor__last_name']}".strip() or v['vendedor__username']
-        elif v['origem'] != Pedido.Origem.MANUAL:
+        elif v['origem'] == Pedido.Origem.WHATSAPP:
             chave, nome = 'bot', '🤖 Bot (sem aprovação registrada)'
+        elif v['origem'] == Pedido.Origem.GRUPO:
+            chave, nome = 'grupo', 'Lançada no grupo (número sem usuário no painel)'
         else:
             chave, nome = 'manual', 'Venda manual (sem vendedor)'
         linha = por_vendedor.setdefault(chave, {'nome': nome, 'pedidos': 0, 'total': Decimal('0')})
@@ -874,6 +876,90 @@ def cliente(request, pk: int):
     })
 
 
+# ── Revendedores: compram para revender, pagam no acerto ──
+
+_NAO_CANCELADO = ~Q(pedidos__status=Pedido.Status.CANCELADO)
+_PENDENTE = _NAO_CANCELADO & Q(pedidos__acertado_em__isnull=True)
+
+
+@login_required
+@fora_do_operador
+def revendedores(request):
+    if request.method == 'POST':
+        form = RevendedorForm(request.POST)
+        if form.is_valid():
+            obj = form.save()
+            auditoria.registrar(
+                request, Tipo.CLIENTE, 'revendedor_criar', f'Cadastrou o revendedor {obj.nome}', alvo=obj,
+            )
+            messages.success(request, f'Revendedor {obj.nome} cadastrado.')
+            return redirect('painel:revendedor', pk=obj.pk)
+    else:
+        form = RevendedorForm()
+    inicio_mes = _inicio_dia(_dia_comercial(timezone.now()).replace(day=1))
+    lista = list(Revendedor.objects.annotate(
+        a_receber=Coalesce(Sum('pedidos__total', filter=_PENDENTE), Decimal('0')),
+        vendas_pendentes=Count('pedidos', filter=_PENDENTE),
+        comprado_mes=Coalesce(
+            Sum('pedidos__total', filter=_NAO_CANCELADO & Q(pedidos__criado_em__gte=inicio_mes)), Decimal('0'),
+        ),
+        ultima_compra=Max('pedidos__criado_em', filter=_NAO_CANCELADO),
+    ).order_by('-ativo', 'nome'))
+    return _render(request, 'painel/revendedores.html', {
+        'secao': 'revendedores', 'revendedores': lista, 'form': form,
+        'total_a_receber': sum((r.a_receber for r in lista), Decimal('0')),
+    })
+
+
+@login_required
+@fora_do_operador
+def revendedor(request, pk: int):
+    obj = get_object_or_404(Revendedor, pk=pk)
+    if request.method == 'POST' and 'acertar' in request.POST:
+        quantidade, valor = servicos.acertar_revendedor(obj)
+        if quantidade:
+            auditoria.registrar(
+                request, Tipo.PEDIDO, 'revendedor_acerto',
+                f'Registrou o acerto de {obj.nome}: {quantidade} venda{"s" if quantidade > 1 else ""}, '
+                f'R$ {auditoria.texto(valor)}',
+                alvo=obj,
+            )
+            messages.success(request, f'Acerto de {formatar_preco(valor)} registrado. {obj.nome} não deve mais nada.')
+        else:
+            messages.info(request, f'{obj.nome} não tinha nada a receber.')
+        return redirect('painel:revendedor', pk=obj.pk)
+    if request.method == 'POST':
+        form = RevendedorForm(request.POST, instance=obj)
+        if form.is_valid():
+            mudancas = auditoria.mudancas_form(form)
+            form.save()
+            if mudancas:
+                auditoria.registrar(
+                    request, Tipo.CLIENTE, 'revendedor_editar', f'Editou o revendedor {obj.nome}',
+                    alvo=obj, mudancas=mudancas,
+                )
+            messages.success(request, 'Revendedor atualizado.')
+            return redirect('painel:revendedor', pk=obj.pk)
+    else:
+        form = RevendedorForm(instance=obj)
+
+    validos = obj.pedidos.exclude(status=Pedido.Status.CANCELADO)
+    return _render(request, 'painel/revendedor.html', {
+        'secao': 'revendedores', 'revendedor': obj, 'form': form,
+        'pedidos': obj.pedidos.select_related('vendedor').prefetch_related('itens')[:100],
+        'a_receber': _somar(validos.filter(acertado_em__isnull=True)),
+        'comprado': _somar(validos),
+        'unidades': ItemPedido.objects.filter(pedido__in=validos).aggregate(
+            n=Coalesce(Sum('quantidade'), 0),
+        )['n'],
+        'ultimo_acerto': validos.aggregate(m=Max('acertado_em'))['m'],
+        'mais_comprados': (
+            ItemPedido.objects.filter(pedido__in=validos)
+            .values('nome').annotate(qtd=Sum('quantidade')).order_by('-qtd')[:8]
+        ),
+    })
+
+
 # ── Pedidos ──
 
 # Mensagem enviada ao cliente quando o status muda (se "avisar cliente" marcado)
@@ -900,7 +986,7 @@ def pedidos(request):
     status = request.GET.get('status', '')
     busca = request.GET.get('q', '').strip()
     loja = request.GET.get('loja', '')
-    qs = Pedido.objects.select_related('cliente', 'loja').prefetch_related('itens')
+    qs = Pedido.objects.select_related('cliente', 'loja', 'revendedor').prefetch_related('itens')
     if loja.isdigit():
         qs = qs.filter(loja_id=loja)
     if status == 'abertos':
@@ -942,7 +1028,9 @@ def mensagem_midia(request, pk: int):
 
 @login_required
 def pedido(request, pk: int):
-    obj = get_object_or_404(Pedido.objects.select_related('cliente').prefetch_related('itens'), pk=pk)
+    obj = get_object_or_404(
+        Pedido.objects.select_related('cliente', 'revendedor', 'vendedor').prefetch_related('itens'), pk=pk,
+    )
     obj.proximo = _PROXIMO_STATUS.get(obj.status)
     obj.proximo_rotulo = Pedido.Status(obj.proximo).label if obj.proximo else ''
     return _render(request, 'painel/pedido.html', {
@@ -1076,16 +1164,6 @@ def _ler_itens_venda(post) -> tuple[list[dict], list[str]]:
     return itens, erros
 
 
-def _normalizar_telefone(texto: str) -> str | None:
-    """'(11) 98888-7777' -> '5511988887777'. Vazio -> ''. Inválido -> None."""
-    digitos = ''.join(c for c in texto if c.isdigit())
-    if not digitos:
-        return ''
-    if len(digitos) in (10, 11):
-        digitos = '55' + digitos
-    return digitos if len(digitos) in (12, 13) and digitos.startswith('55') else None
-
-
 @login_required
 def venda_manual(request):
     """Lança uma venda feita fora do bot para o estoque e os relatórios baterem."""
@@ -1104,7 +1182,7 @@ def venda_manual(request):
         ]
         itens, erros = _ler_itens_venda(post)
 
-        telefone = _normalizar_telefone(dados['telefone'])
+        telefone = servicos.normalizar_telefone(dados['telefone'])
         if telefone is None:
             erros.append('Telefone inválido. Use DDD + número, ex.: (11) 98888-7777.')
         if dados['status'] not in _STATUS_VENDA_MANUAL:
@@ -1327,6 +1405,45 @@ def cardapio_pdf(request):
     return FileResponse(config.cardapio_pdf.open('rb'), content_type='application/pdf', filename='cardapio.pdf')
 
 
+def _salvar_vendas_grupo(request, config: Configuracao) -> None:
+    """WhatsApp de quem está logado (as vendas que ele lança no grupo ficam no
+    nome dele) e, para administradores, liga/desliga a função."""
+    telefone = servicos.normalizar_telefone(request.POST.get('whatsapp', ''))
+    if telefone is None:
+        messages.error(request, 'WhatsApp inválido. Use DDD + número, ex.: (11) 98888-7777.')
+        return
+    if telefone:
+        chave = servicos.chave_telefone(telefone)
+        outro = next((
+            p for p in PerfilEquipe.objects.exclude(usuario=request.user).select_related('usuario')
+            if servicos.chave_telefone(p.whatsapp) == chave
+        ), None)
+        if outro:
+            messages.error(request, f'Esse número já está ligado ao usuário {outro.usuario.get_username()}.')
+            return
+    perfil = PerfilEquipe.objects.filter(usuario=request.user).first()
+    antes = perfil.whatsapp if perfil else ''
+    if telefone:
+        PerfilEquipe.objects.update_or_create(usuario=request.user, defaults={'whatsapp': telefone})
+    elif perfil:
+        perfil.delete()
+
+    mudancas = {}
+    if antes != telefone:
+        mudancas['Seu WhatsApp'] = [auditoria.texto(antes), auditoria.texto(telefone)]
+    ativo = bool(request.POST.get('vendas_pelo_grupo'))
+    if not eh_operador(request.user) and ativo != config.vendas_pelo_grupo:
+        mudancas['Vendas pelo grupo'] = [auditoria.texto(config.vendas_pelo_grupo), auditoria.texto(ativo)]
+        config.vendas_pelo_grupo = ativo
+        config.save(update_fields=['vendas_pelo_grupo'])
+    if mudancas:
+        auditoria.registrar(
+            request, Tipo.CONFIGURACAO, 'vendas_grupo', 'Alterou as vendas pelo grupo',
+            alvo=config, mudancas=mudancas,
+        )
+    messages.success(request, 'Vendas pelo grupo salvas.')
+
+
 @login_required
 def configuracoes(request):
     config = Configuracao.obter()
@@ -1352,6 +1469,10 @@ def configuracoes(request):
             else:
                 _salvar_cardapio_pdf(request, config)
             return redirect('painel:configuracoes')
+
+        if 'vendas_grupo' in request.POST:
+            _salvar_vendas_grupo(request, config)
+            return redirect(reverse('painel:configuracoes') + '#vendas-grupo')
 
         campos_aviso = {
             'grupo_avisos_nome': 'Grupo de avisos',
@@ -1391,6 +1512,7 @@ def configuracoes(request):
     return _render(request, 'painel/configuracoes.html', {
         'secao': 'configuracoes', 'config': config, 'grupos': grupos, 'erro_grupos': erro_grupos,
         'grupo_na_lista': any(g['id'] == config.grupo_avisos_id for g in grupos),
+        'meu_whatsapp': PerfilEquipe.objects.filter(usuario=request.user).values_list('whatsapp', flat=True).first(),
         'painel_url': settings.PAINEL_URL,
         'push_chave': settings.VAPID_PUBLIC_KEY if push.ativo() else '',
         'push_eventos': [{'chave': k, 'nome': nome, 'padrao': padrao} for k, (nome, padrao) in push.EVENTOS.items()],

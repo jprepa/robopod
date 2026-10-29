@@ -35,8 +35,9 @@
         <td><a href="{% url 'painel:pedido' p.pk %}">#{{ p.pk }}</a></td>
         <td>{{ p.criado_em|date:"d/m H:i" }}</td>
         <td>
-          {% if p.cliente %}<a href="{% url 'painel:cliente' p.cliente.pk %}">{{ p.cliente.nome_exibicao }}</a>{% else %}<span class="muted">Balcão</span>{% endif %}
-          {% if p.origem == 'manual' %}<span class="tag manual" title="Lançada à mão no painel">manual</span>{% endif %}
+          {% if p.revendedor %}<a href="{% url 'painel:revendedor' p.revendedor.pk %}">{{ p.revendedor.nome }}</a> <span class="tag {% if p.a_receber %}aguardando_pagamento{% endif %}" title="{% if p.a_receber %}Revendedor ainda não acertou esta venda{% else %}Revendedor{% endif %}">{% if p.a_receber %}a receber{% else %}revendedor{% endif %}</span>
+          {% elif p.cliente %}<a href="{% url 'painel:cliente' p.cliente.pk %}">{{ p.cliente.nome_exibicao }}</a>{% else %}<span class="muted">Balcão</span>{% endif %}
+          {% if p.origem == 'manual' %}<span class="tag manual" title="Lançada à mão no painel">manual</span>{% elif p.origem == 'grupo' %}<span class="tag manual" title="Lançada pela equipe no grupo do WhatsApp">grupo</span>{% endif %}
           {% if lojas_ativas|length > 1 and p.loja %}<span class="tag" title="Número por onde o pedido foi feito">{{ p.loja.nome }}</span>{% endif %}
         </td>
         <td class="muted">{% for i in p.itens.all %}{{ i.quantidade }}× {{ i.nome }}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
@@ -47,9 +48,9 @@
           <form method="post" action="{% url 'painel:pedido_status' p.pk %}" style="display:inline">
             {% csrf_token %}
             <input type="hidden" name="status" value="{{ p.proximo }}">
-            {% if p.origem != 'manual' %}<input type="hidden" name="avisar" value="1">{% endif %}
+            {% if p.origem == 'whatsapp' %}<input type="hidden" name="avisar" value="1">{% endif %}
             <input type="hidden" name="voltar" value="{{ request.get_full_path }}">
-            <button class="btn peq" type="submit" title="{% if p.origem == 'manual' %}Muda o status{% else %}Muda o status e avisa o cliente no WhatsApp{% endif %}">→ {{ p.proximo_rotulo }}</button>
+            <button class="btn peq" type="submit" title="{% if p.origem != 'whatsapp' %}Muda o status{% else %}Muda o status e avisa o cliente no WhatsApp{% endif %}">→ {{ p.proximo_rotulo }}</button>
           </form>
           {% endif %}
         </td>

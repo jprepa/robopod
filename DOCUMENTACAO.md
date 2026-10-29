@@ -150,8 +150,9 @@ comprovante recebido e falha no frete.
 3. Clique em **Enviar mensagem de teste** para confirmar.
 4. Opcional: preencha `PAINEL_URL` no `.env` para os avisos virem com link da conversa.
 
-Mensagens enviadas dentro de grupos são ignoradas pelo bot, então a equipe pode
-conversar no grupo à vontade.
+O bot não atende ninguém dentro de grupos, então a equipe pode conversar no grupo à
+vontade. A exceção são as vendas lançadas pela equipe (3.4.5), que só começam com
+"venda", "saiu" ou "lançar".
 
 ### 3.4.1. Cardápio em PDF
 
@@ -198,6 +199,54 @@ No atendimento, uma foto (ex.: print de um pod) é descrita pelo `OPENAI_MODEL`
 descrição segue para a IA como se o cliente tivesse escrito, junto com a legenda.
 Se não der para ler a foto, ou se for um documento, o bot pede para o cliente
 escrever. Na etapa de pagamento, foto/documento continua valendo como comprovante.
+
+### 3.4.5. Vendas lançadas no grupo (texto ou áudio)
+
+Quem vendeu fora do bot (no número pessoal, na rua, no fechamento com os revendedores)
+lança a venda no **grupo de avisos**, por texto ou áudio, sem abrir o painel:
+
+```
+Ana:  🎤 "Acabou de sair um Ignite V80 Blueberry Ice"
+Bot:  📝 Conferir saída — Ana
+      • 1× Ignite V80 (8.000 puffs) - Blueberry Ice — R$ 120,00 (estoque 5 → 4)
+      Responda ok com o número do cliente (ex.: ok 11 98888-7777), só ok para
+      lançar sem número, ou cancelar.
+Ana:  ok 11 98123-4567
+Bot:  ✅ Venda #312 lançada …
+```
+
+```
+Ana:  "Lançar vendas do revendedor João: 3 Ignite V80 menta, 4 Elfbar 15k uva"
+Bot:  📝 Conferir saída — 👤 Revendedor: João (preço de revenda, fica a receber) …
+Ana:  ok
+Bot:  ✅ Venda #313 lançada · João — a receber no total: R$ 490,00
+```
+
+- **Quando o bot responde:** a mensagem precisa ter "venda", "vendi", "saiu", "sair" ou
+  "lançar" entre as 4 primeiras palavras. Áudios são transcritos para conferir isso;
+  conversa sem essas palavras nem chega na IA. Se a IA entender que não é venda
+  ("saiu pra entrega o pedido 12"), o bot fica quieto.
+- **Conferência:** a IA só entende o que foi dito; modelo, sabor, preço e estoque são
+  conferidos no banco (`core/grupo_equipe.py`). Sabor que não existe, modelo sem
+  sabor dito ou quantidade maior que o estoque ficam de fora, com os sabores em estoque.
+- **Confirmação:** só a mesma pessoa confirma o próprio rascunho (vale 30 min). Antes do
+  *ok* dá para corrigir em linguagem natural ("foram 2", "o sabor é menta", "tira o
+  elfbar"). *cancelar* descarta. Se o estoque mudou entre o resumo e o *ok*, o bot
+  manda o resumo novo em vez de lançar.
+- **O que é lançado:** um pedido com origem *grupo*, status *entregue*, estoque baixado
+  na hora, e o texto/transcrição nas observações. Venda avulsa com número cria ou
+  reaproveita o cliente.
+- **Quem vendeu:** cada pessoa preenche **Seu WhatsApp** em *Configurações → Vendas pelo
+  grupo*; as vendas lançadas desse número ficam no nome dela (Dashboard → por vendedor e
+  Auditoria). Sem número cadastrado, a venda fica com o nome do perfil do WhatsApp.
+- **Revendedores:** aba **Revendedores** no painel. Revendedor que ainda não existe é
+  cadastrado quando a venda é confirmada (o nome é comparado sem acento/maiúsculas com os
+  já cadastrados). As vendas usam o **Preço de revenda** de cada produto (Estoque →
+  produto; vazio = preço do cardápio) e ficam **a receber** até o botão **Registrar
+  acerto** na ficha do revendedor.
+- Desligar: desmarque *Aceitar vendas lançadas no grupo* (só administradores).
+- A instância da Evolution precisa **receber mensagens de grupo** (opção *Ignorar grupos*
+  / `groupsIgnore` desligada, que é o padrão).
 
 ### 3.5. Chave PIX
 
@@ -481,10 +530,11 @@ robopod/
     ├── llm_service.py        # Integração OpenAI com guardrails
     ├── scraper.py            # Cotação de frete via Playwright
     ├── frete.py              # Cotação de frete (Lalamove / estimativa)
+    ├── grupo_equipe.py       # Vendas lançadas pela equipe no grupo (texto/áudio)
     └── notificacoes.py       # WhatsApp (Evolution) e avisos no grupo da equipe
 │
 └── painel/                   # Painel da loja (/painel/)
-    ├── models.py             # Cliente, Categoria, Produto, Variante, Pedido, ItemPedido, Mensagem, RegistroAuditoria
+    ├── models.py             # Cliente, Revendedor, Categoria, Produto, Variante, Pedido, ItemPedido, Mensagem, RegistroAuditoria, PerfilEquipe
     ├── auditoria.py          # Registro de quem fez o quê (aba Auditoria)
     ├── catalogo.py           # Cardápio do banco p/ o bot (cache + validação do carrinho)
     ├── servicos.py           # Clientes, histórico, pedidos e estoque
@@ -545,6 +595,7 @@ Sem o token (ou com o token errado) responde `403`.
 | **Conversas** | Caixa de entrada atualizada a cada 10 s, com filtros (aguardando atendente, não lidas, com pedido aberto) e busca por nome/número. Dentro da conversa, as mensagens novas aparecem sozinhas e dá para responder pelo painel (sai pelo WhatsApp da loja), usar respostas rápidas (botões ou `/comando`; veja abaixo), **assumir** a conversa (o bot para de responder) ou **devolver ao bot**. |
 | **Clientes** | Cadastro por número, criado automaticamente na primeira mensagem (com o nome do perfil do WhatsApp). Mostra total gasto, nº de pedidos, último pedido e o que mais pede. Dá para editar nome/observações e **bloquear** o número (o bot passa a ignorá-lo). |
 | **Pedidos** | Criados automaticamente quando o frete é cotado. O comprovante (imagem ou PDF) enviado pelo cliente fica salvo em `media/comprovantes/` e aparece direto na tela do pedido, ao lado do botão de status, sem precisar abrir o WhatsApp no celular (só para usuários logados). Ao confirmar o pagamento (status pago, saiu para entrega ou entregue) ou cancelar o pedido, o comprovante é **apagado automaticamente** do disco e do pedido. O endereço do pedido é apagado `RETENCAO_ENDERECO_DIAS` depois da entrega (veja *Segurança e dados dos clientes*). Status: aguardando pagamento → comprovante recebido → pago → saiu para entrega → entregue (ou cancelado). Cada mudança pode avisar o cliente no WhatsApp; cancelar devolve o estoque; entregue/cancelado devolve a conversa ao bot. |
+| **Revendedores** | Quem compra para revender. Mostra quanto cada um deve, quanto comprou no mês e as vendas (a receber / acertado). Na ficha, **Registrar acerto** marca todas as vendas a receber como pagas. As vendas entram pelo grupo (3.4.5) com o preço de revenda. Não aparece para o perfil Operador. |
 | **Estoque** | Cardápio do bot: categorias, produtos, preços, sabores/opções e estoque, com ajuste rápido (+/−, preço, ocultar). Vale na hora para o bot. Estoque vazio = não controla; zerado ou oculto some do cardápio. O pedido reserva o estoque ao ser criado. |
 | **Auditoria** | Só para superusuários. Registra quem fez cada ação, quando e de qual IP: logins (inclusive senha errada), respostas e assumir/devolver conversa, edição e bloqueio de cliente, mudança de status, venda manual, ajustes de estoque/preço, produtos, categorias e configurações. Mostra o antes → depois de cada campo e tem link para o item. Também registra o que o **Bot** faz sozinho (pedido criado, comprovante recebido). Cliques seguidos no +/− do estoque viram um registro só. Os registros não podem ser editados nem apagados (no admin ficam só para leitura). |
 

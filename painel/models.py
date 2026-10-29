@@ -105,6 +105,10 @@ class Produto(models.Model):
     nome = models.CharField(max_length=120)
     descricao = models.CharField(max_length=255, blank=True)
     preco = models.DecimalField(max_digits=8, decimal_places=2)
+    preco_revenda = models.DecimalField(
+        'Preço de revenda', max_digits=8, decimal_places=2, null=True, blank=True,
+        help_text='Usado nas vendas para revendedor. Vazio = mesmo preço do cardápio.',
+    )
     imagem_url = models.URLField(blank=True)
     estoque = models.IntegerField(
         null=True, blank=True,
@@ -157,6 +161,24 @@ def _slug_unico(modelo, texto: str) -> str:
     return slug
 
 
+class Revendedor(models.Model):
+    """Quem compra da loja para revender. As vendas para ele saem com o preço de
+    revenda e ficam a receber até o acerto (`Pedido.acertado_em`)."""
+
+    nome = models.CharField(max_length=120)
+    telefone = models.CharField(max_length=20, blank=True, help_text='Formato 55XXXXXXXXXXX')
+    observacoes = models.TextField(blank=True)
+    ativo = models.BooleanField(default=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['nome']
+        verbose_name_plural = 'Revendedores'
+
+    def __str__(self):
+        return self.nome
+
+
 class Pedido(models.Model):
     class Status(models.TextChoices):
         AGUARDANDO_PAGAMENTO = 'aguardando_pagamento', 'Aguardando pagamento'
@@ -169,6 +191,7 @@ class Pedido(models.Model):
     class Origem(models.TextChoices):
         WHATSAPP = 'whatsapp', 'WhatsApp'
         MANUAL = 'manual', 'Venda manual'
+        GRUPO = 'grupo', 'Lançada no grupo'
 
     # Pedidos que contam como venda nos relatórios
     STATUS_FATURADOS = (Status.PAGO, Status.EM_ENTREGA, Status.ENTREGUE)
@@ -202,6 +225,13 @@ class Pedido(models.Model):
         help_text='Imagem ou PDF do comprovante PIX enviado pelo cliente no WhatsApp',
     )
     estoque_baixado = models.BooleanField(default=False)
+    revendedor = models.ForeignKey(
+        Revendedor, on_delete=models.PROTECT, null=True, blank=True, related_name='pedidos',
+        help_text='Venda para revendedor: preço de revenda, a receber até o acerto',
+    )
+    acertado_em = models.DateTimeField(
+        null=True, blank=True, help_text='Quando o revendedor pagou esta venda (vazio = a receber)',
+    )
     criado_em = models.DateTimeField(default=timezone.now, db_index=True)
     atualizado_em = models.DateTimeField(auto_now=True)
 
@@ -210,6 +240,10 @@ class Pedido(models.Model):
 
     def __str__(self):
         return f'Pedido #{self.pk}'
+
+    @property
+    def a_receber(self) -> bool:
+        return bool(self.revendedor_id) and not self.acertado_em and self.status != self.Status.CANCELADO
 
     @property
     def comprovante_eh_pdf(self) -> bool:
@@ -267,6 +301,10 @@ class Configuracao(models.Model):
     expediente_aberto_em = models.DateTimeField(null=True, blank=True)
     horario_atendimento = models.CharField(max_length=120, blank=True, default=HORARIO_PADRAO)
     mensagem_fechado = models.TextField(blank=True, default=MENSAGEM_FECHADO_PADRAO)
+    vendas_pelo_grupo = models.BooleanField(
+        default=True,
+        help_text='A equipe lança vendas mandando "venda ...", "saiu ..." ou "lançar ..." no grupo de avisos',
+    )
 
     class Meta:
         verbose_name = 'Configuração'
@@ -442,3 +480,16 @@ class InscricaoPush(models.Model):
 
     def __str__(self):
         return f'{self.usuario} · {self.aparelho or "aparelho"}'
+
+
+class PerfilEquipe(models.Model):
+    """Número do WhatsApp de quem usa o painel: a venda lançada no grupo por
+    esse número fica com essa pessoa como vendedora."""
+
+    usuario = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='perfil_equipe',
+    )
+    whatsapp = models.CharField(max_length=20, unique=True, help_text='Formato 55XXXXXXXXXXX')
+
+    def __str__(self):
+        return f'{self.usuario} ({self.whatsapp})'

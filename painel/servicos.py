@@ -12,12 +12,31 @@ from django.db.models import F
 from django.utils import timezone
 
 from . import auditoria, catalogo
-from .models import Cliente, ItemPedido, Mensagem, Pedido, Produto, Variante
+from .models import Cliente, ItemPedido, Mensagem, Pedido, Produto, Revendedor, Variante
 
 logger = logging.getLogger(__name__)
 
 
 # ── Clientes e mensagens ──
+
+
+def normalizar_telefone(texto: str) -> str | None:
+    """'(11) 98888-7777' -> '5511988887777'. Vazio -> ''. Inválido -> None."""
+    digitos = ''.join(c for c in texto if c.isdigit())
+    if not digitos:
+        return ''
+    if len(digitos) in (10, 11):
+        digitos = '55' + digitos
+    return digitos if len(digitos) in (12, 13) and digitos.startswith('55') else None
+
+
+def chave_telefone(telefone: str) -> str:
+    """DDD + 8 últimos dígitos: o WhatsApp às vezes manda celular sem o 9 na
+    frente, então '5511988887777' e '551188887777' são o mesmo número."""
+    digitos = ''.join(c for c in telefone if c.isdigit())
+    if digitos.startswith('55') and len(digitos) in (12, 13):
+        return digitos[2:4] + digitos[-8:]
+    return digitos
 
 
 async def registrar_mensagem_cliente(
@@ -168,12 +187,14 @@ async def criar_pedido(telefone: str, carrinho: dict, frete: dict) -> Pedido | N
 def registrar_venda_manual(
     itens: list[dict], *, status: str, criado_em, telefone: str = '', nome: str = '',
     frete: Decimal = Decimal('0'), observacoes: str = '', vendedor=None,
+    origem: str = Pedido.Origem.MANUAL, revendedor: Revendedor | None = None,
 ) -> Pedido:
     """Lança no painel uma venda feita fora do bot (balcão, ligação, conversa
     no WhatsApp pessoal...) e baixa o estoque como num pedido normal.
 
     Cada item: {'produto': Produto, 'variante': Variante | None,
-    'quantidade': int, 'preco_unitario': Decimal}."""
+    'quantidade': int, 'preco_unitario': Decimal}. Venda para `revendedor`
+    fica a receber até o acerto."""
     with transaction.atomic():
         cliente = None
         if telefone:
@@ -184,7 +205,8 @@ def registrar_venda_manual(
         subtotal = sum(i['preco_unitario'] * i['quantidade'] for i in itens)
         pedido = Pedido.objects.create(
             cliente=cliente,
-            origem=Pedido.Origem.MANUAL,
+            origem=origem,
+            revendedor=revendedor,
             status=status,
             subtotal=subtotal,
             frete=frete,
@@ -208,6 +230,20 @@ def registrar_venda_manual(
         pedido.estoque_baixado = True
         pedido.save(update_fields=['estoque_baixado'])
     return pedido
+
+
+def acertar_revendedor(revendedor: Revendedor) -> tuple[int, Decimal]:
+    """Marca como pagas todas as vendas a receber do revendedor.
+
+    Returns:
+        (quantidade de vendas, valor acertado)."""
+    pendentes = Pedido.objects.filter(revendedor=revendedor, acertado_em__isnull=True).exclude(
+        status=Pedido.Status.CANCELADO,
+    )
+    with transaction.atomic():
+        valor = sum((p.total for p in pendentes.select_for_update()), Decimal('0'))
+        quantidade = pendentes.update(acertado_em=timezone.now())
+    return quantidade, valor
 
 
 def mudar_status(pedido: Pedido, status: str) -> None:

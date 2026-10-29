@@ -38,7 +38,7 @@ from .notificacoes import (
 from painel import catalogo, lojas, servicos
 from painel.models import Configuracao
 
-from . import frete
+from . import frete, grupo_equipe
 from .frete import cotar_frete
 
 logger = logging.getLogger(__name__)
@@ -1170,6 +1170,14 @@ async def evolution_webhook(request) -> JsonResponse:
     evento = body.get('event', '')
     if evento not in ('messages.upsert', 'MESSAGES_UPSERT', ''):
         return JsonResponse({'status': 'evento ignorado'})
+
+    # Grupo da equipe: vendas lançadas por texto ou áudio (core/grupo_equipe.py)
+    remetente = ((body.get('data') or {}).get('key') or {}).get('remoteJid') or ''
+    if remetente.endswith('@g.us'):
+        loja = await lojas.da_instancia(str(body.get('instance') or ''))
+        if loja is not None and loja.ativa:
+            await grupo_equipe.receber(body, loja.instancia)
+        return JsonResponse({'status': 'grupo'})
 
     dados = _extrair_dados_webhook(body)
     if dados is None:

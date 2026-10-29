@@ -1,0 +1,38 @@
+{% extends 'painel/base.html' %}
+{% load painel_tags %}
+{% block titulo %}Revendedores{% endblock %}
+{% block conteudo %}
+<div class="topo"><h1>Revendedores <span class="muted" style="font-size:15px;font-weight:500">{{ total_a_receber|brl }} a receber</span></h1></div>
+<div class="grade g-3-1">
+  <div class="cartao tabela-wrap" style="padding:0;align-self:start">
+    <table>
+      <thead><tr><th>Revendedor</th><th>Número</th><th class="num">A receber</th><th class="num">Comprou no mês</th><th>Última compra</th></tr></thead>
+      <tbody>
+      {% for r in revendedores %}
+        <tr>
+          <td><a href="{% url 'painel:revendedor' r.pk %}">{{ r.nome }}</a>{% if not r.ativo %} <span class="tag cancelado">inativo</span>{% endif %}</td>
+          <td>{{ r.telefone|telefone|default:"—" }}</td>
+          <td class="num">{% if r.a_receber %}<b>{{ r.a_receber|brl }}</b> <span class="muted peq">({{ r.vendas_pendentes }} venda{{ r.vendas_pendentes|pluralize }})</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td class="num">{{ r.comprado_mes|brl }}</td>
+          <td>{{ r.ultima_compra|date:"d/m/Y"|default:"—" }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="vazio">Nenhum revendedor ainda. Cadastre ao lado ou lance uma venda no grupo ("lançar vendas do revendedor João: ...") que ele é cadastrado na confirmação.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <section class="cartao" style="align-self:start">
+    <h2>Novo revendedor</h2>
+    <form method="post" class="grade" style="gap:12px">
+      {% csrf_token %}
+      <div class="campo"><label for="id_nome">Nome</label>{{ form.nome }}{% for e in form.nome.errors %}<div class="erro">{{ e }}</div>{% endfor %}</div>
+      <div class="campo"><label for="id_telefone">WhatsApp</label>{{ form.telefone }}{% for e in form.telefone.errors %}<div class="erro">{{ e }}</div>{% endfor %}</div>
+      <div class="campo"><label for="id_observacoes">Observações</label>{{ form.observacoes }}</div>
+      <input type="hidden" name="ativo" value="on">
+      <div><button class="btn primario" type="submit">Cadastrar</button></div>
+    </form>
+    <p class="muted peq" style="margin-bottom:0">Vendas para revendedor saem pelo <b>preço de revenda</b> de cada produto (Estoque → produto) e ficam <b>a receber</b> até você registrar o acerto.</p>
+  </section>
+</div>
+{% endblock %}

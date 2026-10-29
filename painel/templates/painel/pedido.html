@@ -3,7 +3,7 @@
 {% block titulo %}Pedido #{{ pedido.pk }}{% endblock %}
 {% block conteudo %}
 <div class="topo">
-  <h1>Pedido #{{ pedido.pk }} <span class="tag {{ pedido.status }}" style="vertical-align:middle">{{ pedido.get_status_display }}</span>{% if pedido.origem == 'manual' %} <span class="tag manual" style="vertical-align:middle">venda manual</span>{% endif %}{% if lojas_ativas|length > 1 and pedido.loja %} <span class="tag" style="vertical-align:middle" title="Número por onde o pedido foi feito">{{ pedido.loja.nome }}</span>{% endif %}</h1>
+  <h1>Pedido #{{ pedido.pk }} <span class="tag {{ pedido.status }}" style="vertical-align:middle">{{ pedido.get_status_display }}</span>{% if pedido.origem == 'manual' %} <span class="tag manual" style="vertical-align:middle">venda manual</span>{% elif pedido.origem == 'grupo' %} <span class="tag manual" style="vertical-align:middle">lançada no grupo</span>{% endif %}{% if lojas_ativas|length > 1 and pedido.loja %} <span class="tag" style="vertical-align:middle" title="Número por onde o pedido foi feito">{{ pedido.loja.nome }}</span>{% endif %}</h1>
   {% if operador %}<a class="btn" href="{% url 'painel:conversas' %}">← Conversas</a>{% else %}<a class="btn" href="{% url 'painel:pedidos' %}">← Pedidos</a>{% endif %}
 </div>
 <div class="grade g-3-1">
@@ -28,7 +28,7 @@
       <div style="white-space:pre-line">{{ pedido.observacoes }}</div>
     </section>
     {% endif %}
-    {% if pedido.origem != 'manual' or pedido.endereco %}
+    {% if pedido.origem == 'whatsapp' or pedido.endereco %}
     <section class="cartao">
       <h2>Entrega</h2>
       <dl class="dados" style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px">
@@ -41,6 +41,15 @@
   </div>
 
   <div class="grade" style="align-content:start">
+    {% if pedido.revendedor %}
+    <section class="cartao">
+      <h2>Revendedor</h2>
+      <div>{% if operador %}{{ pedido.revendedor.nome }}{% else %}<a href="{% url 'painel:revendedor' pedido.revendedor.pk %}">{{ pedido.revendedor.nome }}</a>{% endif %}</div>
+      <div style="margin-top:8px">{% if pedido.a_receber %}<span class="tag aguardando_pagamento">A receber</span>{% elif pedido.acertado_em %}<span class="tag entregue">Acertado em {{ pedido.acertado_em|date:"d/m/Y H:i" }}</span>{% endif %}</div>
+      {% if pedido.vendedor %}<div class="muted peq" style="margin-top:10px">Lançada por {{ pedido.vendedor.get_username }}</div>{% endif %}
+      <div class="muted peq" style="margin-top:4px">Criado em {{ pedido.criado_em|date:"d/m/Y H:i" }}</div>
+    </section>
+    {% else %}
     <section class="cartao">
       <h2>Cliente</h2>
       {% if pedido.cliente %}
@@ -50,8 +59,10 @@
       {% else %}
       <div class="muted">Venda no balcão, sem cliente identificado.</div>
       {% endif %}
+      {% if pedido.origem != 'whatsapp' and pedido.vendedor %}<div class="muted peq" style="margin-top:10px">Lançada por {{ pedido.vendedor.get_username }}</div>{% endif %}
       <div class="muted peq" style="margin-top:10px">Criado em {{ pedido.criado_em|date:"d/m/Y H:i" }} · atualizado {{ pedido.atualizado_em|date:"d/m H:i" }}</div>
     </section>
+    {% endif %}
     {% if pedido.comprovante %}
     <section class="cartao">
       <h2>Comprovante de pagamento</h2>
@@ -76,7 +87,7 @@
         <select name="status">
           {% for valor, rotulo in status_choices %}<option value="{{ valor }}" {% if valor == pedido.proximo|default:pedido.status %}selected{% endif %}>{{ rotulo }}</option>{% endfor %}
         </select>
-        {% if pedido.cliente %}<label class="peq"><input type="checkbox" name="avisar" value="1" {% if pedido.origem != 'manual' %}checked{% endif %}> Avisar o cliente no WhatsApp</label>{% endif %}
+        {% if pedido.cliente %}<label class="peq"><input type="checkbox" name="avisar" value="1" {% if pedido.origem == 'whatsapp' %}checked{% endif %}> Avisar o cliente no WhatsApp</label>{% endif %}
         <div><button class="btn primario" type="submit">Atualizar status</button></div>
         <div class="muted peq">Cancelar devolve os itens ao estoque.</div>
       </form>

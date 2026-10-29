@@ -1,4 +1,5 @@
 {% extends 'painel/base.html' %}
+{% load painel_tags %}
 {% block titulo %}Configurações{% endblock %}
 {% block conteudo %}
 <div class="topo"><h1>Configurações</h1></div>
@@ -42,6 +43,30 @@
         <button class="btn primario" type="submit">Salvar</button>
         {% if config.grupo_avisos_id %}<button class="btn" type="submit" name="testar" value="1" formnovalidate>Enviar mensagem de teste</button>{% endif %}
       </div>
+    </form>
+  </section>
+  <section class="cartao" id="vendas-grupo">
+    <h2>Vendas pelo grupo</h2>
+    <p class="muted" style="margin-top:0">
+      Quem vendeu fora do bot manda no grupo de avisos um texto ou áudio começando com <b>venda</b>,
+      <b>saiu</b> ou <b>lançar</b> — ex.: <i>"saiu um Ignite V80 Blueberry Ice"</i> ou
+      <i>"lançar vendas do revendedor João: 3 Ignite V80 menta, 2 Elfbar uva"</i>. O bot confere no
+      estoque, responde com o resumo e só dá baixa quando a mesma pessoa responde <b>ok</b>
+      (venda avulsa: <i>ok 11 98888-7777</i> com o número do cliente).
+    </p>
+    <form method="post" class="grade" style="gap:14px">
+      {% csrf_token %}
+      <input type="hidden" name="vendas_grupo" value="1">
+      <div class="campo">
+        <label for="whatsapp">Seu WhatsApp</label>
+        <input type="tel" name="whatsapp" id="whatsapp" value="{{ meu_whatsapp|telefone }}" placeholder="(11) 98888-7777">
+        <div class="ajuda">Com o seu número aqui, as vendas que você lançar no grupo ficam no seu nome. Cada pessoa da equipe preenche o próprio.</div>
+      </div>
+      {% if not operador %}
+      <div class="campo"><label><input type="checkbox" name="vendas_pelo_grupo" value="1" {% if config.vendas_pelo_grupo %}checked{% endif %}> Aceitar vendas lançadas no grupo</label></div>
+      {% endif %}
+      {% if not config.grupo_avisos_id %}<div class="erro">Escolha o grupo de avisos acima: é nele que a equipe lança as vendas.</div>{% endif %}
+      <div><button class="btn primario" type="submit">Salvar</button></div>
     </form>
   </section>
   <section class="cartao">

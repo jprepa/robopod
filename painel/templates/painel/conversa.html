@@ -118,10 +118,10 @@
       <form class="avancar" method="post" action="{% url 'painel:pedido_status' p.pk %}">
         {% csrf_token %}
         <input type="hidden" name="status" value="{{ p.proximo }}">
-        {% if p.origem != 'manual' %}<input type="hidden" name="avisar" value="1">{% endif %}
+        {% if p.origem == 'whatsapp' %}<input type="hidden" name="avisar" value="1">{% endif %}
         <input type="hidden" name="voltar" value="{{ request.get_full_path }}">
         <span><a href="{% url 'painel:pedido' p.pk %}">Pedido #{{ p.pk }}</a> · {{ p.total|brl }} <span class="tag {{ p.status }}">{{ p.get_status_display }}</span>{% if p.comprovante %} · <a href="{% url 'painel:pedido_comprovante' p.pk %}" target="_blank" rel="noopener" title="Abrir o comprovante enviado pelo cliente">🧾 Ver comprovante</a>{% endif %}</span>
-        <button class="btn primario peq" type="submit" title="{% if p.origem == 'manual' %}Muda o status{% else %}Muda o status e avisa o cliente no WhatsApp{% endif %}">→ {{ p.proximo_rotulo }}</button>
+        <button class="btn primario peq" type="submit" title="{% if p.origem != 'whatsapp' %}Muda o status{% else %}Muda o status e avisa o cliente no WhatsApp{% endif %}">→ {{ p.proximo_rotulo }}</button>
       </form>
       {% endif %}{% endfor %}
       </div>{% endif %}

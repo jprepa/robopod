@@ -28,9 +28,9 @@
           <form method="post" action="{% url 'painel:pedido_status' p.pk %}">
             {% csrf_token %}
             <input type="hidden" name="status" value="em_entrega">
-            {% if p.origem != 'manual' %}<input type="hidden" name="avisar" value="1">{% endif %}
+            {% if p.origem == 'whatsapp' %}<input type="hidden" name="avisar" value="1">{% endif %}
             <input type="hidden" name="voltar" value="{% url 'painel:inicio' %}">
-            <button class="btn peq" type="submit" title="Muda o status{% if p.origem != 'manual' %} e avisa o cliente no WhatsApp{% endif %}">🛵 Saiu</button>
+            <button class="btn peq" type="submit" title="Muda o status{% if p.origem == 'whatsapp' %} e avisa o cliente no WhatsApp{% endif %}">🛵 Saiu</button>
           </form>
         </li>
         {% endfor %}
@@ -121,9 +121,9 @@
                 <form method="post" action="{% url 'painel:pedido_status' p.pk %}" style="display:inline">
                   {% csrf_token %}
                   <input type="hidden" name="status" value="{{ p.proximo }}">
-                  {% if p.origem != 'manual' %}<input type="hidden" name="avisar" value="1">{% endif %}
+                  {% if p.origem == 'whatsapp' %}<input type="hidden" name="avisar" value="1">{% endif %}
                   <input type="hidden" name="voltar" value="{% url 'painel:inicio' %}">
-                  <button class="btn peq" type="submit" title="Muda o status{% if p.origem != 'manual' %} e avisa o cliente no WhatsApp{% endif %}">→ {{ p.proximo_rotulo }}</button>
+                  <button class="btn peq" type="submit" title="Muda o status{% if p.origem == 'whatsapp' %} e avisa o cliente no WhatsApp{% endif %}">→ {{ p.proximo_rotulo }}</button>
                 </form>
                 {% endif %}
               </td>

@@ -3,7 +3,8 @@ import re
 from django import forms
 from django.forms import inlineformset_factory
 
-from .models import Categoria, Cliente, Produto, RespostaRapida, Variante
+from . import servicos
+from .models import Categoria, Cliente, Produto, RespostaRapida, Revendedor, Variante
 
 # Comandos do chat que já vêm prontos (ver painel/views.py: _comandos_chat)
 COMANDOS_FIXOS = ('nome', 'endereco', 'pedido')
@@ -16,6 +17,19 @@ class ClienteForm(forms.ModelForm):
         widgets = {'observacoes': forms.Textarea(attrs={'rows': 3})}
 
 
+class RevendedorForm(forms.ModelForm):
+    class Meta:
+        model = Revendedor
+        fields = ['nome', 'telefone', 'observacoes', 'ativo']
+        widgets = {'observacoes': forms.Textarea(attrs={'rows': 3})}
+
+    def clean_telefone(self):
+        telefone = servicos.normalizar_telefone(self.cleaned_data['telefone'])
+        if telefone is None:
+            raise forms.ValidationError('Telefone inválido. Use DDD + número, ex.: (11) 98888-7777.')
+        return telefone
+
+
 class CategoriaForm(forms.ModelForm):
     class Meta:
         model = Categoria
@@ -26,7 +40,7 @@ class ProdutoForm(forms.ModelForm):
     class Meta:
         model = Produto
         fields = [
-            'categoria', 'nome', 'descricao', 'preco', 'estoque', 'estoque_minimo',
+            'categoria', 'nome', 'descricao', 'preco', 'preco_revenda', 'estoque', 'estoque_minimo',
             'imagem_url', 'ordem', 'ativo',
         ]
 

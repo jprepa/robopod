@@ -97,6 +97,20 @@ def registrar_bot(tipo: str, acao: str, descricao: str, *, alvo=None, mudancas: 
 aregistrar_bot = sync_to_async(registrar_bot)
 
 
+def registrar_equipe(
+    usuario, nome: str, tipo: str, acao: str, descricao: str, *, alvo=None,
+) -> None:
+    """Ação pedida por alguém da equipe pelo grupo do WhatsApp. Sem usuário do
+    painel ligado ao número, fica o nome do WhatsApp da pessoa."""
+    alvo_tipo, alvo_id = _alvo(alvo)
+    _gravar({
+        'usuario': usuario,
+        'responsavel': usuario.get_username() if usuario else f'{nome or "?"} (grupo)'[:150],
+        'tipo': tipo, 'acao': acao, 'descricao': descricao[:255],
+        'alvo_tipo': alvo_tipo, 'alvo_id': alvo_id,
+    })
+
+
 # ── Mudanças (antes → depois) ──
 
 
