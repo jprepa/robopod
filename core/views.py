@@ -36,7 +36,7 @@ from .notificacoes import (
     enviar_lista_whatsapp, enviar_imagem_whatsapp, enviar_documento_whatsapp,
 )
 from painel import catalogo, lojas, servicos
-from painel.models import Configuracao
+from painel.models import Configuracao, Loja
 
 from . import frete, grupo_equipe
 from .frete import cotar_frete
@@ -200,22 +200,25 @@ async def _enviar_cardapio(telefone: str, rodape: bool = True) -> None:
 
 
 async def _enviar_pdf_cardapio(telefone: str, rodape: bool = True) -> bool:
-    """Envia o PDF do cardápio, se houver um carregado em Painel > Configurações.
+    """Envia o PDF do cardápio da loja que fala com o cliente (Painel > Lojas)
+    ou, se ela não tiver um, o de Painel > Configurações.
 
     Devolve False se não há PDF ou o envio falhou (aí vai a lista escrita).
     """
-    config = await Configuracao.aobter()
-    if not config.cardapio_pdf:
+    _, loja_id = await lojas.rota(telefone)
+    loja = await Loja.objects.filter(pk=loja_id).afirst() if loja_id else None
+    pdf = loja.cardapio_pdf if loja and loja.cardapio_pdf else (await Configuracao.aobter()).cardapio_pdf
+    if not pdf:
         return False
 
     def _ler() -> bytes:
-        with config.cardapio_pdf.open('rb') as arquivo:
+        with pdf.open('rb') as arquivo:
             return arquivo.read()
 
     try:
         conteudo = await sync_to_async(_ler)()
     except OSError:
-        logger.exception('PDF do cardápio não encontrado: %s', config.cardapio_pdf.name)
+        logger.exception('PDF do cardápio não encontrado: %s', pdf.name)
         return False
     legenda = '📄 Nosso cardápio completo'
     if rodape:
@@ -998,6 +1001,7 @@ class _Recebida:
     tipo: str
     data: dict
     instancia: str
+    loja_id: int | None = None  # preços e PDF do cardápio desta loja
     chaves: list[dict] = field(default_factory=list)  # para marcar como lida
     chegou: float = field(default_factory=time.monotonic)
 
@@ -1076,6 +1080,7 @@ async def _responder(telefone: str, recebida: _Recebida) -> None:
     """Responde uma mensagem (ou várias já juntadas) do cliente."""
     texto, tipo_interacao = recebida.texto, recebida.tipo
     data, instancia = recebida.data, recebida.instancia
+    catalogo.usar_loja(recebida.loja_id)
 
     if await _bot_pausado_tratou(telefone, texto, tipo_interacao, data, instancia):
         return
@@ -1236,6 +1241,7 @@ async def evolution_webhook(request) -> JsonResponse:
         tipo=tipo_interacao,
         data=body.get('data', body),
         instancia=instancia,
+        loja_id=loja.pk,
         chaves=[chave],
     ))
     return JsonResponse({'status': 'ok'})

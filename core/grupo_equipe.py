@@ -30,8 +30,10 @@ from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 
-from painel import auditoria, catalogo, servicos
-from painel.models import Categoria, Configuracao, PerfilEquipe, Pedido, Produto, Revendedor, Variante
+from painel import auditoria, catalogo, lojas, servicos
+from painel.models import (
+    Categoria, Configuracao, Loja, PerfilEquipe, Pedido, Produto, Revendedor, Variante, precos_da_loja,
+)
 
 from .llm_service import _PARAMETROS_ITENS, _get_client, formatar_preco, transcrever_audio
 from .notificacoes import baixar_midia, responder_no_grupo
@@ -190,6 +192,8 @@ Chame `lancar_saida` com TODOS os itens citados:
 - Venda para revendedor ("do revendedor João", "pro João revender", "fechamento do João"):
   preencha `revendedor` com o nome dito. Venda para cliente final: deixe vazio.
 - Número do cliente dito na mensagem vai em `telefone_cliente` (só dígitos, com DDD).
+- Loja da venda ("na loja 2", "pela Barra") vai em `loja`, com o nome da lista de lojas abaixo.
+  Sem loja dita, deixe vazio.
 
 Se houver uma VENDA EM ANDAMENTO, a mensagem pode corrigir ou completar essa venda
 ("na verdade foram 2", "o sabor é menta", "tira o elfbar", "mais um ignite uva"): devolva
@@ -197,6 +201,8 @@ a venda COMPLETA já corrigida, mantendo o que não mudou.
 
 Chame `ignorar` se a mensagem não descreve venda nem corrige a venda em andamento
 (conversa da equipe, "saiu para entrega" de um pedido do bot, dúvida etc.).
+
+LOJAS: {lojas}
 
 CARDÁPIO (modelo: sabores):
 {cardapio}"""
@@ -219,6 +225,7 @@ _TOOLS = [
                         'type': 'string', 'description': 'Número do cliente final, se foi dito (DDD + número)',
                     },
                     'nome_cliente': {'type': 'string', 'description': 'Nome do cliente final, se foi dito'},
+                    'loja': {'type': 'string', 'description': 'Loja da venda, se foi dita. Vazio = loja principal'},
                 },
                 'required': ['itens'],
             },
@@ -244,10 +251,11 @@ def _cardapio_prompt() -> str:
 
 
 async def _interpretar(texto: str, em_andamento: dict | None) -> dict | None:
-    """{'itens': [...], 'revendedor', 'telefone_cliente', 'nome_cliente'} ou
-    None se a mensagem não for venda."""
+    """{'itens': [...], 'revendedor', 'telefone_cliente', 'nome_cliente', 'loja'}
+    ou None se a mensagem não for venda."""
     cardapio = await sync_to_async(_cardapio_prompt)()
-    mensagens = [{'role': 'system', 'content': _PROMPT.format(cardapio=cardapio)}]
+    nomes_lojas = ', '.join([lj.nome async for lj in Loja.objects.filter(ativa=True)]) or '-'
+    mensagens = [{'role': 'system', 'content': _PROMPT.format(cardapio=cardapio, lojas=nomes_lojas)}]
     if em_andamento:
         mensagens.append({
             'role': 'system',
@@ -277,6 +285,7 @@ async def _interpretar(texto: str, em_andamento: dict | None) -> dict | None:
         'revendedor': str(args.get('revendedor') or '').strip()[:120],
         'telefone_cliente': str(args.get('telefone_cliente') or '').strip(),
         'nome_cliente': str(args.get('nome_cliente') or '').strip()[:120],
+        'loja': str(args.get('loja') or '').strip()[:60],
     }
 
 
@@ -307,6 +316,16 @@ def _localizar_revendedor(nome: str) -> Revendedor | None:
     return achado['revendedor'] if achado else None
 
 
+def _localizar_loja(nome: str) -> tuple[Loja | None, bool]:
+    """(loja da venda, achou a loja dita). Sem loja dita (ou não achada), a principal."""
+    if nome:
+        opcoes = [{'nome': lj.nome, 'loja': lj} for lj in Loja.objects.filter(ativa=True)]
+        achado = catalogo.localizar_item(nome, opcoes) if opcoes else None
+        if achado:
+            return achado['loja'], True
+    return lojas.principal_sync(), not nome
+
+
 def _quantidade(valor) -> int:
     try:
         return max(1, int(valor or 1))
@@ -322,6 +341,8 @@ def _conferir(pedido: dict) -> dict:
          'revendedor': Revendedor | None (None também se for novo)}.
     """
     produtos = _catalogo_equipe()
+    loja, loja_achada = _localizar_loja(pedido.get('loja') or '')
+    precos = precos_da_loja(loja.pk if loja else None)
     para_revendedor = bool(pedido.get('revendedor'))
     revendedor = _localizar_revendedor(pedido['revendedor']) if para_revendedor else None
     linhas: dict[tuple, dict] = {}
@@ -356,7 +377,7 @@ def _conferir(pedido: dict) -> dict:
             'variante': variante['variante'] if variante else None,
             'nome': f"{produto.nome} - {variante['nome']}" if variante else produto.nome,
             'quantidade': quantidade,
-            'preco': produto.preco_revenda if usa_revenda else produto.preco,
+            'preco': produto.preco_revenda if usa_revenda else precos.get(produto.pk, produto.preco),
             'sem_preco_revenda': para_revendedor and not usa_revenda,
             'estoque': (variante or item)['estoque'],
         }
@@ -373,7 +394,11 @@ def _conferir(pedido: dict) -> dict:
             )
         else:
             itens.append(linha)
-    return {'itens': itens, 'problemas': problemas, 'revendedor': revendedor}
+    return {
+        'itens': itens, 'problemas': problemas, 'revendedor': revendedor,
+        'loja': loja, 'loja_achada': loja_achada,
+        'varias_lojas': Loja.objects.filter(ativa=True).count() > 1,
+    }
 
 
 def _assinatura(itens: list[dict]) -> list:
@@ -399,6 +424,12 @@ def _texto_resumo(nome: str, pedido: dict, conferido: dict) -> str:
             linhas.append(f'👤 Revendedor: *{revendedor.nome}* (preço de revenda, fica a receber)')
         else:
             linhas.append(f"👤 Revendedor: *{pedido['revendedor']}* — novo, será cadastrado ao confirmar")
+    loja = conferido['loja']
+    if conferido['varias_lojas'] and loja:
+        if conferido['loja_achada']:
+            linhas.append(f'🏪 Loja: *{loja.nome}*')
+        else:
+            linhas.append(f"🏪 Loja: *{loja.nome}* (não achei a loja *{pedido['loja']}*; para trocar, mande a correção)")
     linhas.append('')
 
     total = Decimal('0')
@@ -513,6 +544,7 @@ def _lancar(rascunho: dict, telefone: str, usuario, nome: str) -> str | dict:
             vendedor=usuario,
             origem=Pedido.Origem.GRUPO,
             revendedor=revendedor,
+            loja=conferido['loja'],
         )
 
     n_itens = sum(linha['quantidade'] for linha in conferido['itens'])

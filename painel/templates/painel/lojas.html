@@ -1,13 +1,18 @@
 {% extends 'painel/base.html' %}
 {% block titulo %}Lojas{% endblock %}
+{% block estilo %}
+.form-pdf { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.form-pdf input[type=file] { max-width: 210px; font-size: 13px; }
+{% endblock %}
 {% block conteudo %}
 <div class="topo">
   <h1>Lojas (números do WhatsApp)</h1>
   <a class="btn" href="{% url 'painel:configuracoes' %}">‹ Configurações</a>
 </div>
 <p class="muted" style="margin-top:0">
-  Cada loja é um número de WhatsApp. Todas usam o mesmo cardápio, estoque, equipe e configurações.
-  O cliente é um só: o bot e os atendentes respondem pelo número que ele chamou por último.
+  Cada loja é um número de WhatsApp. Todas usam o mesmo cardápio, estoque, equipe e configurações;
+  os preços podem mudar por loja (em <a href="{% url 'painel:estoque' %}">Estoque</a>) e cada uma pode ter o próprio PDF do cardápio.
+  O cliente é um só: o bot e os atendentes respondem pelo número que ele chamou por último, com os preços dessa loja.
 </p>
 <div class="grade g-3-1">
   <section class="cartao tabela-wrap" style="padding:0">
@@ -59,6 +64,41 @@
       <div><button class="btn primario" type="submit">Criar e mostrar o QR Code</button></div>
     </form>
   </section>
+  {% if lojas %}
+  <section class="cartao" id="pdf" style="grid-column: 1 / -1">
+    <h2>Cardápio em PDF por loja</h2>
+    <p class="muted" style="margin-top:0">
+      Vai junto das boas-vindas para quem chama por esse número. Loja sem PDF próprio manda o de
+      <a href="{% url 'painel:configuracoes' %}">Configurações</a>{% if not pdf_padrao %} (hoje nenhum: só o cardápio em texto){% endif %}.
+    </p>
+    <table>
+      <tbody>
+      {% for loja in lojas %}
+        <tr>
+          <td><b>{{ loja.nome }}</b></td>
+          <td>
+            {% if loja.cardapio_pdf %}
+              <a href="{% url 'painel:cardapio_pdf_loja' loja.pk %}" target="_blank">📄 PDF próprio ({{ loja.cardapio_pdf.size|filesizeformat }})</a>
+            {% else %}
+              <span class="muted">{% if pdf_padrao %}O de Configurações{% else %}Nenhum (só texto){% endif %}</span>
+            {% endif %}
+          </td>
+          <td>
+            <form method="post" enctype="multipart/form-data" class="form-pdf">
+              {% csrf_token %}
+              <input type="hidden" name="acao" value="pdf">
+              <input type="hidden" name="loja" value="{{ loja.pk }}">
+              <input type="file" name="cardapio_pdf" accept="application/pdf,.pdf" required aria-label="PDF do cardápio da {{ loja.nome }}">
+              <button class="btn peq" type="submit">{% if loja.cardapio_pdf %}Trocar{% else %}Enviar{% endif %}</button>
+              {% if loja.cardapio_pdf %}<button class="btn peq" type="submit" name="cardapio_pdf" value="remover" formnovalidate title="Volta a mandar o PDF de Configurações">Remover</button>{% endif %}
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
   {% if qr %}
   <section class="cartao" id="qr" style="grid-column: 1 / -1">
     <h2>Conectar {{ qr.loja.nome }}</h2>

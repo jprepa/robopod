@@ -52,6 +52,7 @@ urlpatterns = [
     path('configuracoes/', views.configuracoes, name='configuracoes'),
     path('configuracoes/lojas/', views.lojas, name='lojas'),
     path('configuracoes/cardapio.pdf', views.cardapio_pdf, name='cardapio_pdf'),
+    path('configuracoes/lojas/<int:loja>/cardapio.pdf', views.cardapio_pdf, name='cardapio_pdf_loja'),
     path('configuracoes/respostas-rapidas/', views.respostas_rapidas, name='respostas_rapidas'),
 
     path('auditoria/', views.auditoria_lista, name='auditoria'),

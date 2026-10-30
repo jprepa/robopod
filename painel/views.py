@@ -37,7 +37,7 @@ from .auditoria import Tipo
 from .forms import CategoriaForm, ClienteForm, ProdutoForm, RespostaRapidaForm, RevendedorForm, VarianteFormSet
 from .models import (
     MENSAGEM_FECHADO_PADRAO, Categoria, Cliente, Configuracao, ItemPedido, Loja, Mensagem, Pedido, PerfilEquipe,
-    Produto, RegistroAuditoria, RespostaRapida, Revendedor, Variante,
+    PrecoLoja, Produto, RegistroAuditoria, RespostaRapida, Revendedor, Variante, precos_da_loja,
 )
 from .permissoes import eh_operador, fora_do_operador
 
@@ -705,7 +705,7 @@ def _comandos_chat(cliente: Cliente, pedidos_abertos: list, respostas: list) -> 
             ),
             'texto': gerar_sabores_texto(item),
         }
-        for categoria in catalogo.atualizado()['categorias'] for item in categoria['itens']
+        for categoria in catalogo.atualizado(cliente.loja_atual_id)['categorias'] for item in categoria['itens']
     ]
     return {
         'variaveis': variaveis,
@@ -1104,20 +1104,21 @@ _STATUS_VENDA_MANUAL = (Pedido.Status.ENTREGUE, Pedido.Status.PAGO, Pedido.Statu
 
 def _opcoes_venda() -> list[dict]:
     """Itens vendáveis agrupados por categoria. Produto com opções é vendido
-    pela opção, que é onde fica o estoque."""
+    pela opção, que é onde fica o estoque. `precos`: preço próprio por loja."""
     grupos = []
-    for cat in Categoria.objects.prefetch_related('produtos__variantes'):
+    for cat in Categoria.objects.prefetch_related('produtos__variantes', 'produtos__precos_loja'):
         itens = []
         for p in cat.produtos.all():
+            precos = {str(pl.loja_id): str(pl.preco) for pl in p.precos_loja.all()}
             variantes = list(p.variantes.all())
             for v in variantes:
                 itens.append({
-                    'id': f'v{v.pk}', 'nome': f'{p.nome} - {v.nome}', 'preco': str(p.preco),
+                    'id': f'v{v.pk}', 'nome': f'{p.nome} - {v.nome}', 'preco': str(p.preco), 'precos': precos,
                     'estoque': v.estoque, 'oculto': not (p.ativo and v.ativo),
                 })
             if not variantes:
                 itens.append({
-                    'id': f'p{p.pk}', 'nome': p.nome, 'preco': str(p.preco),
+                    'id': f'p{p.pk}', 'nome': p.nome, 'preco': str(p.preco), 'precos': precos,
                     'estoque': p.estoque, 'oculto': not p.ativo,
                 })
         if itens:
@@ -1125,8 +1126,9 @@ def _opcoes_venda() -> list[dict]:
     return grupos
 
 
-def _ler_itens_venda(post) -> tuple[list[dict], list[str]]:
+def _ler_itens_venda(post, loja: Loja | None) -> tuple[list[dict], list[str]]:
     itens, erros = [], []
+    precos = precos_da_loja(loja.pk if loja else None)
     produtos = {p.pk: p for p in Produto.objects.all()}
     variantes = {v.pk: v for v in Variante.objects.all()}
     for ref, qtd, preco in zip(post.getlist('item'), post.getlist('qtd'), post.getlist('preco')):
@@ -1149,7 +1151,9 @@ def _ler_itens_venda(post) -> tuple[list[dict], list[str]]:
             erros.append(f'Quantidade inválida para {nome}.')
             continue
         try:
-            preco_unitario = Decimal(preco.replace(',', '.')) if preco.strip() else produto.preco
+            preco_unitario = (
+                Decimal(preco.replace(',', '.')) if preco.strip() else precos.get(produto.pk, produto.preco)
+            )
             if not preco_unitario.is_finite() or preco_unitario < 0:
                 raise ArithmeticError
         except ArithmeticError:
@@ -1168,19 +1172,26 @@ def _ler_itens_venda(post) -> tuple[list[dict], list[str]]:
 def venda_manual(request):
     """Lança uma venda feita fora do bot para o estoque e os relatórios baterem."""
     agora_local = timezone.localtime().replace(second=0, microsecond=0)
+    lojas_venda = list(Loja.objects.filter(ativa=True))
     dados = {
         'telefone': '', 'nome': '', 'frete': '', 'observacoes': '',
         'status': _STATUS_VENDA_MANUAL[0], 'quando': agora_local.strftime('%Y-%m-%dT%H:%M'),
-        'itens': [],
+        'loja': str(lojas_venda[0].pk) if lojas_venda else '', 'itens': [],
     }
     if request.method == 'POST':
         post = request.POST
-        dados.update({k: post.get(k, '').strip() for k in ('telefone', 'nome', 'frete', 'observacoes', 'status', 'quando')})
+        dados.update({
+            k: post.get(k, '').strip()
+            for k in ('telefone', 'nome', 'frete', 'observacoes', 'status', 'quando', 'loja')
+        })
         dados['itens'] = [
             {'id': i, 'qtd': q, 'preco': p}
             for i, q, p in zip(post.getlist('item'), post.getlist('qtd'), post.getlist('preco')) if i
         ]
-        itens, erros = _ler_itens_venda(post)
+        loja = next((lj for lj in lojas_venda if str(lj.pk) == dados['loja']), None)
+        itens, erros = _ler_itens_venda(post, loja)
+        if lojas_venda and loja is None:
+            erros.append('Escolha a loja da venda.')
 
         telefone = servicos.normalizar_telefone(dados['telefone'])
         if telefone is None:
@@ -1204,7 +1215,7 @@ def venda_manual(request):
             pedido = servicos.registrar_venda_manual(
                 itens, status=dados['status'], criado_em=quando, telefone=telefone,
                 nome=dados['nome'], frete=frete.quantize(Decimal('0.01')),
-                observacoes=dados['observacoes'], vendedor=request.user,
+                observacoes=dados['observacoes'], vendedor=request.user, loja=loja,
             )
             n_itens = sum(i['quantidade'] for i in itens)
             auditoria.registrar(
@@ -1232,6 +1243,7 @@ def venda_manual(request):
         'dados': dados,
         'opcoes': _opcoes_venda(),
         'status_opcoes': [(s.value, s.label) for s in _STATUS_VENDA_MANUAL],
+        'lojas': lojas_venda,
     })
 
 
@@ -1249,15 +1261,32 @@ def estoque(request):
             Q(estoque__isnull=False, estoque__lte=F('estoque_minimo'))
             | Q(variantes__estoque__isnull=False, variantes__estoque__lte=F('estoque_minimo')),
         ).distinct()
+    lojas = _lojas_com_preco()
     grupos = defaultdict(list)
-    for p in produtos:
+    for p in _com_precos_lojas(produtos.prefetch_related('precos_loja'), lojas):
         grupos[p.categoria].append(p)
     return _render(request, 'painel/estoque.html', {
         'secao': 'estoque',
         'grupos': sorted(grupos.items(), key=lambda g: (g[0].ordem, g[0].nome)),
         'busca': busca,
         'baixo': bool(request.GET.get('baixo')),
+        'lojas': lojas,
     })
+
+
+def _lojas_com_preco() -> list[Loja]:
+    """Lojas que ganham uma coluna de preço no estoque (só com mais de uma)."""
+    lojas = list(Loja.objects.filter(ativa=True))
+    return lojas if len(lojas) > 1 else []
+
+
+def _com_precos_lojas(produtos, lojas: list[Loja]) -> list[Produto]:
+    """Põe em cada produto `precos_lojas`: [(loja, preço próprio ou None)]."""
+    produtos = list(produtos)
+    for p in produtos:
+        proprios = {pl.loja_id: pl.preco for pl in p.precos_loja.all()} if lojas else {}
+        p.precos_lojas = [(loja, proprios.get(loja.pk)) for loja in lojas]
+    return produtos
 
 
 @login_required
@@ -1285,6 +1314,8 @@ def estoque_ajustar(request, tipo: str, pk: int):
     if 'alternar_ativo' in request.POST:
         obj.ativo = not obj.ativo
         campos.append('ativo')
+    if 'preco_loja' in request.POST and tipo == 'produto':
+        _ajustar_preco_loja(request, obj)
     if campos:
         obj.save(update_fields=list(dict.fromkeys(campos)))
         rotulos = {'estoque': 'Estoque', 'preco': 'Preço', 'ativo': 'Ativo'}
@@ -1301,8 +1332,37 @@ def estoque_ajustar(request, tipo: str, pk: int):
             )
 
     produto = obj if tipo == 'produto' else obj.produto
-    produto = Produto.objects.prefetch_related('variantes').get(pk=produto.pk)
-    return render(request, 'painel/parciais/estoque_produto.html', {'p': produto})
+    lojas = _lojas_com_preco()
+    produto = _com_precos_lojas(
+        Produto.objects.prefetch_related('variantes', 'precos_loja').filter(pk=produto.pk), lojas,
+    )[0]
+    return render(request, 'painel/parciais/estoque_produto.html', {'p': produto, 'lojas': lojas})
+
+
+def _ajustar_preco_loja(request, produto: Produto) -> None:
+    """Preço do produto numa loja. Em branco, a loja volta ao preço padrão."""
+    loja = get_object_or_404(Loja, pk=request.POST.get('loja'))
+    valor = request.POST['preco_loja'].strip().replace(',', '.')
+    atual = PrecoLoja.objects.filter(loja=loja, produto=produto).first()
+    antes = atual.preco if atual else None
+    if not valor:
+        if atual:
+            atual.delete()
+        depois = None
+    else:
+        try:
+            depois = Decimal(valor).quantize(Decimal('0.01'))
+            if not depois.is_finite() or depois < 0:
+                raise ArithmeticError
+        except ArithmeticError:
+            return
+        PrecoLoja.objects.update_or_create(loja=loja, produto=produto, defaults={'preco': depois})
+    if antes != depois:
+        rotulo = lambda v: auditoria.texto(v) if v is not None else f'padrão ({auditoria.texto(produto.preco)})'
+        auditoria.registrar(
+            request, Tipo.ESTOQUE, 'estoque_ajustar', f'Ajustou {produto}', alvo=produto,
+            mudancas={f'Preço na {loja.nome}': [rotulo(antes), rotulo(depois)]}, agrupar_minutos=3,
+        )
 
 
 def _mudancas_variantes(formset) -> dict:
@@ -1366,14 +1426,19 @@ def produto_editar(request, pk: int | None = None):
 _CARDAPIO_PDF_MAX_MB = 30
 
 
-def _salvar_cardapio_pdf(request, config: Configuracao) -> None:
-    """Troca ou remove o PDF do cardápio enviado nas boas-vindas."""
+def _salvar_cardapio_pdf(request, dono: Configuracao | Loja) -> None:
+    """Troca ou remove o PDF do cardápio enviado nas boas-vindas: o padrão
+    (Configurações) ou o de uma loja."""
+    da_loja = f' da {dono.nome}' if isinstance(dono, Loja) else ''
     if request.POST.get('cardapio_pdf') == 'remover':
-        config.cardapio_pdf.delete(save=True)
+        dono.cardapio_pdf.delete(save=True)
         auditoria.registrar(
-            request, Tipo.CONFIGURACAO, 'cardapio_pdf', 'Removeu o PDF do cardápio', alvo=config,
+            request, Tipo.CONFIGURACAO, 'cardapio_pdf', f'Removeu o PDF do cardápio{da_loja}', alvo=dono,
         )
-        messages.success(request, 'PDF do cardápio removido. O bot manda só o cardápio em texto.')
+        messages.success(request, (
+            f'PDF do cardápio{da_loja} removido. Ela passa a mandar o PDF de Configurações.' if da_loja
+            else 'PDF do cardápio removido. Lojas sem PDF próprio mandam só o cardápio em texto.'
+        ))
         return
 
     arquivo = request.FILES.get('cardapio_pdf')
@@ -1387,22 +1452,22 @@ def _salvar_cardapio_pdf(request, config: Configuracao) -> None:
         messages.error(request, f'O PDF passa de {_CARDAPIO_PDF_MAX_MB} MB. Comprima o arquivo e tente de novo.')
         return
 
-    if config.cardapio_pdf:
-        config.cardapio_pdf.delete(save=False)
-    config.cardapio_pdf.save('cardapio.pdf', arquivo, save=True)
+    if dono.cardapio_pdf:
+        dono.cardapio_pdf.delete(save=False)
+    dono.cardapio_pdf.save(f'cardapio-{dono.instancia}.pdf' if da_loja else 'cardapio.pdf', arquivo, save=True)
     auditoria.registrar(
-        request, Tipo.CONFIGURACAO, 'cardapio_pdf', f'Trocou o PDF do cardápio ({arquivo.name})',
-        alvo=config,
+        request, Tipo.CONFIGURACAO, 'cardapio_pdf', f'Trocou o PDF do cardápio{da_loja} ({arquivo.name})',
+        alvo=dono,
     )
-    messages.success(request, 'PDF do cardápio atualizado. Ele vai junto das boas-vindas para novos clientes.')
+    messages.success(request, f'PDF do cardápio{da_loja} atualizado. Ele vai junto das boas-vindas para novos clientes.')
 
 
 @login_required
-def cardapio_pdf(request):
-    config = Configuracao.obter()
-    if not config.cardapio_pdf:
+def cardapio_pdf(request, loja: int | None = None):
+    dono = get_object_or_404(Loja, pk=loja) if loja else Configuracao.obter()
+    if not dono.cardapio_pdf:
         raise Http404
-    return FileResponse(config.cardapio_pdf.open('rb'), content_type='application/pdf', filename='cardapio.pdf')
+    return FileResponse(dono.cardapio_pdf.open('rb'), content_type='application/pdf', filename='cardapio.pdf')
 
 
 def _salvar_vendas_grupo(request, config: Configuracao) -> None:
@@ -1538,6 +1603,9 @@ def lojas(request):
         if acao == 'criar':
             return _criar_loja(request)
         loja = get_object_or_404(Loja, pk=request.POST.get('loja'))
+        if acao == 'pdf':
+            _salvar_cardapio_pdf(request, loja)
+            return redirect(reverse('painel:lojas') + '#pdf')
         if acao == 'principal':
             Loja.objects.update(principal=False)
             Loja.objects.filter(pk=loja.pk).update(principal=True, ativa=True)
@@ -1568,7 +1636,10 @@ def lojas(request):
         qr_loja = Loja.objects.filter(pk=request.GET['qr']).first()
         if qr_loja is not None:
             qr = {'loja': qr_loja, 'imagem': async_to_sync(qr_code)(qr_loja.instancia)}
-    return _render(request, 'painel/lojas.html', {'secao': 'configuracoes', 'lojas': lista, 'qr': qr})
+    return _render(request, 'painel/lojas.html', {
+        'secao': 'configuracoes', 'lojas': lista, 'qr': qr,
+        'pdf_padrao': bool(Configuracao.obter().cardapio_pdf),
+    })
 
 
 def _criar_loja(request):

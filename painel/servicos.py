@@ -12,7 +12,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from . import auditoria, catalogo
-from .models import Cliente, ItemPedido, Mensagem, Pedido, Produto, Revendedor, Variante
+from .models import Cliente, ItemPedido, Loja, Mensagem, Pedido, Produto, Revendedor, Variante
 
 logger = logging.getLogger(__name__)
 
@@ -187,14 +187,14 @@ async def criar_pedido(telefone: str, carrinho: dict, frete: dict) -> Pedido | N
 def registrar_venda_manual(
     itens: list[dict], *, status: str, criado_em, telefone: str = '', nome: str = '',
     frete: Decimal = Decimal('0'), observacoes: str = '', vendedor=None,
-    origem: str = Pedido.Origem.MANUAL, revendedor: Revendedor | None = None,
+    origem: str = Pedido.Origem.MANUAL, revendedor: Revendedor | None = None, loja: Loja | None = None,
 ) -> Pedido:
     """Lança no painel uma venda feita fora do bot (balcão, ligação, conversa
     no WhatsApp pessoal...) e baixa o estoque como num pedido normal.
 
     Cada item: {'produto': Produto, 'variante': Variante | None,
     'quantidade': int, 'preco_unitario': Decimal}. Venda para `revendedor`
-    fica a receber até o acerto."""
+    fica a receber até o acerto. `loja`: de qual loja foi a venda (relatórios)."""
     with transaction.atomic():
         cliente = None
         if telefone:
@@ -206,6 +206,7 @@ def registrar_venda_manual(
         pedido = Pedido.objects.create(
             cliente=cliente,
             origem=origem,
+            loja=loja,
             revendedor=revendedor,
             status=status,
             subtotal=subtotal,

@@ -4,6 +4,10 @@ O bot lê `atual()` (síncrono, sem consulta) e chama `garantir_atualizado()` no
 início de cada mensagem. Alterações feitas no painel invalidam o cache na hora;
 o TTL cobre alterações feitas por outro processo (ex.: shell, admin em outro worker).
 
+Cada loja tem o seu cardápio em cache: o mesmo catálogo e estoque, com os
+preços próprios da loja (`PrecoLoja`). A loja da conversa vem de `usar_loja()`,
+chamado no começo de cada resposta; vale só para a task que o chamou.
+
 Produtos/opções inativos ou com estoque zerado não aparecem para o cliente.
 """
 
@@ -11,12 +15,13 @@ import difflib
 import re
 import time
 import unicodedata
+from contextvars import ContextVar
 
 from asgiref.sync import sync_to_async
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
-from .models import Categoria, Produto, Variante
+from .models import Categoria, PrecoLoja, Produto, Variante, precos_da_loja
 
 _TTL_SEGUNDOS = 60
 # Semelhança mínima para casar o nome escrito pela IA com um produto
@@ -24,24 +29,34 @@ _SIMILARIDADE_MINIMA = 0.6
 # Para o sabor é bem mais rígida: só cobre erro de digitação, nunca outro sabor
 _SIMILARIDADE_SABOR = 0.85
 
-_cache: dict = {'categorias': []}
-_carregado_em = 0.0
-_sujo = True
+_VAZIO: dict = {'categorias': []}
+# loja_id -> (versão, carregado_em, cardápio). Invalidar só sobe a versão: até
+# recarregar, `atual()` segue devolvendo o cardápio anterior (nunca vazio).
+_caches: dict[int | None, tuple[int, float, dict]] = {}
+_versao = 0
+_loja: ContextVar[int | None] = ContextVar('catalogo_loja', default=None)
+
+
+def usar_loja(loja_id: int | None) -> None:
+    """Loja da conversa atendida nesta task: define os preços de `atual()`."""
+    _loja.set(loja_id)
 
 
 def atual() -> dict:
     """Cardápio no formato {'categorias': [{'id', 'titulo', 'itens': [...]}]}."""
-    return _cache
+    entrada = _caches.get(_loja.get())
+    return entrada[2] if entrada else _VAZIO
 
 
 def invalidar() -> None:
-    global _sujo
-    _sujo = True
+    global _versao
+    _versao += 1
 
 
 @receiver([post_save, post_delete], sender=Categoria)
 @receiver([post_save, post_delete], sender=Produto)
 @receiver([post_save, post_delete], sender=Variante)
+@receiver([post_save, post_delete], sender=PrecoLoja)
 def _ao_alterar_catalogo(**kwargs):
     invalidar()
 
@@ -50,7 +65,8 @@ def _disponivel(estoque: int | None) -> bool:
     return estoque is None or estoque > 0
 
 
-def _montar() -> dict:
+def _montar(loja_id: int | None) -> dict:
+    precos = precos_da_loja(loja_id)
     categorias = []
     for cat in Categoria.objects.filter(ativo=True).prefetch_related('produtos__variantes'):
         itens = []
@@ -66,7 +82,7 @@ def _montar() -> dict:
             itens.append({
                 'id': p.slug,
                 'nome': p.nome,
-                'preco': float(p.preco),
+                'preco': float(precos.get(p.pk, p.preco)),
                 'descricao': p.descricao,
                 'imagem_url': p.imagem_url,
                 'variantes': [
@@ -82,25 +98,31 @@ def _montar() -> dict:
     return {'categorias': categorias}
 
 
-def recarregar() -> dict:
-    global _cache, _carregado_em, _sujo
-    _sujo = False
-    _cache = _montar()
-    _carregado_em = time.monotonic()
-    return _cache
+def recarregar(loja_id: int | None = None) -> dict:
+    versao = _versao
+    cardapio = _montar(loja_id)
+    _caches[loja_id] = (versao, time.monotonic(), cardapio)
+    return cardapio
+
+
+def _vencido(loja_id: int | None) -> bool:
+    entrada = _caches.get(loja_id)
+    return entrada is None or entrada[0] != _versao or time.monotonic() - entrada[1] > _TTL_SEGUNDOS
 
 
 async def garantir_atualizado() -> dict:
-    if _sujo or time.monotonic() - _carregado_em > _TTL_SEGUNDOS:
-        await sync_to_async(recarregar)()
-    return _cache
+    """Recarrega, se preciso, o cardápio da loja de `usar_loja()`."""
+    loja_id = _loja.get()
+    if _vencido(loja_id):
+        return await sync_to_async(recarregar)(loja_id)
+    return _caches[loja_id][2]
 
 
-def atualizado() -> dict:
+def atualizado(loja_id: int | None = None) -> dict:
     """Versão síncrona de `garantir_atualizado()`, para as views do painel."""
-    if _sujo or time.monotonic() - _carregado_em > _TTL_SEGUNDOS:
-        recarregar()
-    return _cache
+    if _vencido(loja_id):
+        return recarregar(loja_id)
+    return _caches[loja_id][2]
 
 
 # ── Validação do carrinho fechado pela IA ──
@@ -186,7 +208,8 @@ def localizar_variante(referencia: str, variantes: list[dict]) -> dict | None:
     return None
 
 
-def _validar_itens(itens: list[dict]) -> tuple[list[dict], list[str]]:
+def _validar_itens(itens: list[dict], loja_id: int | None) -> tuple[list[dict], list[str]]:
+    precos = precos_da_loja(loja_id)
     validados, problemas = [], []
     for item in itens:
         quantidade = max(1, int(item.get('quantidade') or 1))
@@ -210,7 +233,7 @@ def _validar_itens(itens: list[dict]) -> tuple[list[dict], list[str]]:
         validados.append({
             'nome': nome,
             'quantidade': quantidade,
-            'preco_unitario': float(produto.preco),  # preço do banco, não o da IA
+            'preco_unitario': float(precos.get(produto.pk, produto.preco)),  # do banco, não o da IA
             'produto_id': produto.pk,
             'variante_id': variante.pk if variante else None,
         })
@@ -219,9 +242,9 @@ def _validar_itens(itens: list[dict]) -> tuple[list[dict], list[str]]:
 
 async def validar_itens(itens: list[dict]) -> tuple[list[dict], list[str]]:
     """Confere no banco os itens já casados com o cardápio (`conferir_itens` do
-    bot), corrige preços e checa estoque.
+    bot), corrige preços (os da loja de `usar_loja()`) e checa estoque.
 
     Returns:
         (itens validados, lista de problemas de estoque para avisar o cliente).
     """
-    return await sync_to_async(_validar_itens)(itens)
+    return await sync_to_async(_validar_itens)(itens, _loja.get())

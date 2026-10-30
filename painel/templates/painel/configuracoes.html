@@ -73,6 +73,7 @@
     <h2>Cardápio em PDF</h2>
     <p class="muted" style="margin-top:0">
       Enviado ao cliente junto das boas-vindas, antes da lista de modelos e preços.
+      {% if user.is_superuser %}Lojas com PDF próprio (em <a href="{% url 'painel:lojas' %}">Lojas</a>) mandam o delas; este vale para as demais.{% endif %}
     </p>
     {% if config.cardapio_pdf %}
       <p>📄 PDF atual: <a href="{% url 'painel:cardapio_pdf' %}" target="_blank">{{ config.cardapio_pdf.size|filesizeformat }}</a></p>

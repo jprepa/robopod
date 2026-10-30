@@ -43,6 +43,15 @@ input[type=tel], input[type=datetime-local] {
 
     <section class="cartao lado" style="align-self:start">
       <h2>Venda</h2>
+      {% if lojas|length > 1 %}
+      <div class="campo">
+        <label for="loja">Loja</label>
+        <select id="loja" name="loja">
+          {% for loja in lojas %}<option value="{{ loja.pk }}" {% if dados.loja == loja.pk|stringformat:'s' %}selected{% endif %}>{{ loja.nome }}</option>{% endfor %}
+        </select>
+        <div class="ajuda">Os preços sugeridos são os desta loja.</div>
+      </div>
+      {% elif lojas %}<input type="hidden" name="loja" value="{{ lojas.0.pk }}">{% endif %}
       <div class="campo">
         <label for="quando">Data e hora</label>
         <input type="datetime-local" id="quando" name="quando" value="{{ dados.quando }}" required>
@@ -102,6 +111,9 @@ input[type=tel], input[type=datetime-local] {
   const brl = v => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   const numero = t => { const n = parseFloat(String(t).replace(',', '.')); return isFinite(n) ? n : 0; };
   const precoTexto = p => numero(p).toFixed(2).replace('.', ',');
+  const seletorLoja = document.getElementById('loja');
+  // Preço de tabela na loja escolhida (sem preço próprio, o padrão)
+  const precoLoja = item => (seletorLoja && item.precos[seletorLoja.value]) || item.preco;
 
   function preencherSelect(sel) {
     sel.add(new Option('Escolha o produto…', ''));
@@ -129,7 +141,7 @@ input[type=tel], input[type=datetime-local] {
       if (resta < 0) { dica.textContent += ' (vai ficar negativo)'; dica.classList.add('alerta'); }
     }
     const preco = tr.querySelector('.in-preco');
-    const unit = preco.value.trim() ? numero(preco.value) : (item ? numero(item.preco) : 0);
+    const unit = preco.value.trim() ? numero(preco.value) : (item ? numero(precoLoja(item)) : 0);
     tr.querySelector('.t-linha').textContent = brl(unit * qtd);
     return unit * qtd;
   }
@@ -156,7 +168,8 @@ input[type=tel], input[type=datetime-local] {
     // Ao trocar o produto, sugere o preço de tabela (dá para editar: desconto etc.)
     sel.addEventListener('change', () => {
       const item = porId[sel.value];
-      preco.value = item ? precoTexto(item.preco) : '';
+      preco.value = item ? precoTexto(precoLoja(item)) : '';
+      preco.dataset.sugerido = preco.value;
       recalcular();
     });
     tr.addEventListener('input', recalcular);
@@ -174,6 +187,18 @@ input[type=tel], input[type=datetime-local] {
     recalcular();
   });
   frete.addEventListener('input', recalcular);
+  // Outra loja: troca os preços sugeridos (os digitados à mão ficam)
+  if (seletorLoja) seletorLoja.addEventListener('change', () => {
+    for (const tr of corpo.rows) {
+      const item = porId[tr.querySelector('select').value];
+      const preco = tr.querySelector('.in-preco');
+      if (item && preco.value === preco.dataset.sugerido) {
+        preco.value = precoTexto(precoLoja(item));
+        preco.dataset.sugerido = preco.value;
+      }
+    }
+    recalcular();
+  });
 
   if (iniciais.length) iniciais.forEach(novaLinha); else novaLinha();
   recalcular();

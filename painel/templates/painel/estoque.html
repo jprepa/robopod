@@ -6,6 +6,7 @@
 .in-estoque.baixo { border-color: var(--warn); }
 .in-estoque.zerado { border-color: var(--bad); }
 .in-preco { width: 92px !important; font-variant-numeric: tabular-nums; }
+.in-preco.proprio { border-color: var(--accent); font-weight: 600; }
 tbody.inativo .linha-produto td:first-child, tr.inativo td:first-child { opacity: .55; }
 .recuo { padding-left: 28px; color: var(--text-2); }
 .linha-variante td { border-bottom-style: dashed; }
@@ -31,7 +32,10 @@ tbody + tbody { border-top: 1px solid var(--border); }
   .estoque-tabela .linha-produto .c-nome { grid-column: 1 / -1; }
   .estoque-tabela .linha-produto .c-preco { grid-column: 1; }
   .estoque-tabela .linha-produto .c-preco::before { content: 'R$ '; color: var(--muted); font-size: 13px; }
+  .estoque-tabela.com-lojas .linha-produto .c-preco::before { content: 'Padrão: R$ '; }
   .estoque-tabela .linha-produto .c-estoque { grid-column: 1 / -1; grid-row: 3; }
+  .estoque-tabela .linha-produto .c-preco-loja { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
+  .estoque-tabela .linha-produto .c-preco-loja::before { content: attr(data-rotulo); color: var(--muted); font-size: 13px; min-width: 96px; }
   .estoque-tabela .linha-produto .c-cardapio { grid-column: 2; grid-row: 2; }
   .estoque-tabela .linha-produto .c-acoes { grid-column: 3; grid-row: 2; }
   .estoque-tabela tr.linha-variante {
@@ -59,7 +63,7 @@ tbody + tbody { border-top: 1px solid var(--border); }
   <input type="search" name="q" value="{{ busca }}" placeholder="Buscar produto ou sabor">
   <label class="chip" style="cursor:pointer"><input type="checkbox" name="baixo" value="1" {% if baixo %}checked{% endif %} onchange="this.form.submit()"> Só estoque baixo</label>
   <button class="btn" type="submit">Buscar</button>
-  <span class="muted peq">Alterações valem para o bot na hora. Itens ocultos ou com estoque zerado somem do cardápio.</span>
+  <span class="muted peq">Alterações valem para o bot na hora. Itens ocultos ou com estoque zerado somem do cardápio.{% if lojas %} Preço de loja em branco = preço padrão.{% endif %}</span>
 </form>
 
 {% for categoria, produtos in grupos %}
@@ -68,8 +72,8 @@ tbody + tbody { border-top: 1px solid var(--border); }
     <h2>{{ categoria.titulo }}{% if not categoria.ativo %} <span class="tag cancelado">categoria oculta</span>{% endif %}</h2>
     <span class="muted peq">{{ produtos|length }} produto{{ produtos|length|pluralize }}</span>
   </div>
-  <table class="estoque-tabela">
-    <thead><tr><th>Produto</th><th>Preço (R$)</th><th>Estoque</th><th>Cardápio</th><th></th></tr></thead>
+  <table class="estoque-tabela{% if lojas %} com-lojas{% endif %}">
+    <thead><tr><th>Produto</th><th>{% if lojas %}<span title="Vale nas lojas sem preço próprio">Preço padrão (R$)</span>{% else %}Preço (R$){% endif %}</th>{% for loja in lojas %}<th title="Em branco: preço padrão">{{ loja.nome }} (R$)</th>{% endfor %}<th>Estoque</th><th>Cardápio</th><th></th></tr></thead>
     {% for p in produtos %}{% include 'painel/parciais/estoque_produto.html' %}{% endfor %}
   </table>
 </section>

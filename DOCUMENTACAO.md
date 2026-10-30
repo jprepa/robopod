@@ -122,7 +122,8 @@ EVOLUTION_INSTANCE=robopod
 ### 3.3.1. Vários números (lojas)
 
 A operação pode ter vários números de WhatsApp, cada um uma instância da Evolution, todos
-ligados ao mesmo painel, cardápio, estoque, equipe e configurações. Cadastre em
+ligados ao mesmo painel, cardápio, estoque, equipe e configurações. Os **preços** e o
+**PDF do cardápio** podem ser diferentes em cada loja (3.3.2). Cadastre em
 **Configurações → Lojas** (só administradores): o painel cria a instância na Evolution e
 mostra o QR Code para conectar o número.
 
@@ -139,6 +140,26 @@ mostra o QR Code para conectar o número.
   participar do grupo.
 - A mesma mensagem entregue duas vezes pela Evolution é tratada uma vez só (id da
   mensagem guardado por 10 minutos).
+
+### 3.3.2. Preço e cardápio em PDF por loja
+
+O estoque é um só, mas cada loja pode vender pelo próprio preço:
+
+- **Estoque**: com mais de uma loja ativa, a tabela ganha uma coluna de preço por loja
+  ao lado do **Preço padrão**. Em branco, a loja usa o preço padrão; preenchido, vale
+  só para ela (fica destacado). Alterações valem para o bot na hora e entram na
+  Auditoria ("Preço na Barra: padrão (100,00) → 120,00"). Tabela `PrecoLoja`.
+- **Bot**: cada conversa usa os preços da loja por onde o cliente chamou (cardápio em
+  texto, lista, sabores, resposta da IA e o preço gravado no pedido). O cardápio fica
+  em cache por loja (`painel/catalogo.py`; a loja da conversa vem de `usar_loja()`).
+- **Comandos `/` da conversa** mostram o preço da loja atual do cliente.
+- **Venda manual**: escolha a **Loja**; os preços sugeridos são os dela (os digitados à
+  mão não mudam ao trocar de loja) e o pedido fica com essa loja.
+- **Vendas no grupo**: diga a loja na mensagem ("saiu um Ignite menta *na Barra*"); sem
+  loja dita, vale a **principal**. O resumo mostra a loja para conferir. O preço de
+  revenda é o mesmo em todas as lojas.
+- **PDF do cardápio**: em **Configurações → Lojas → Cardápio em PDF por loja**, envie o
+  PDF de cada loja. Loja sem PDF próprio manda o de **Configurações › Cardápio em PDF**.
 
 ### 3.4. Grupo de avisos no WhatsApp
 
@@ -159,7 +180,7 @@ vontade. A exceção são as vendas lançadas pela equipe (3.4.5), que só come�
 Em **Configurações › Cardápio em PDF**, envie o PDF do cardápio (até 30 MB). Ele vai
 para todo cliente novo junto das boas-vindas, antes da lista de modelos e preços. O
 arquivo fica em `media/cardapio/` na pasta do projeto (fora do git) e pode ser trocado
-ou removido ali mesmo.
+ou removido ali mesmo. Lojas com PDF próprio (3.3.2) mandam o delas no lugar deste.
 
 Quem fica mais de 4 horas sem falar com o bot recebe as boas-vindas de novo na
 próxima mensagem.
@@ -234,7 +255,8 @@ Bot:  ✅ Venda #313 lançada · João — a receber no total: R$ 490,00
   elfbar"). *cancelar* descarta. Se o estoque mudou entre o resumo e o *ok*, o bot
   manda o resumo novo em vez de lançar.
 - **O que é lançado:** um pedido com origem *grupo*, status *entregue*, estoque baixado
-  na hora, e o texto/transcrição nas observações. Venda avulsa com número cria ou
+  na hora, e o texto/transcrição nas observações. Preço e loja: os da loja dita na
+  mensagem, ou da principal (3.3.2). Venda avulsa com número cria ou
   reaproveita o cliente.
 - **Quem vendeu:** cada pessoa preenche **Seu WhatsApp** em *Configurações → Vendas pelo
   grupo*; as vendas lançadas desse número ficam no nome dela (Dashboard → por vendedor e
@@ -596,7 +618,7 @@ Sem o token (ou com o token errado) responde `403`.
 | **Clientes** | Cadastro por número, criado automaticamente na primeira mensagem (com o nome do perfil do WhatsApp). Mostra total gasto, nº de pedidos, último pedido e o que mais pede. Dá para editar nome/observações e **bloquear** o número (o bot passa a ignorá-lo). |
 | **Pedidos** | Criados automaticamente quando o frete é cotado. O comprovante (imagem ou PDF) enviado pelo cliente fica salvo em `media/comprovantes/` e aparece direto na tela do pedido, ao lado do botão de status, sem precisar abrir o WhatsApp no celular (só para usuários logados). Ao confirmar o pagamento (status pago, saiu para entrega ou entregue) ou cancelar o pedido, o comprovante é **apagado automaticamente** do disco e do pedido. O endereço do pedido é apagado `RETENCAO_ENDERECO_DIAS` depois da entrega (veja *Segurança e dados dos clientes*). Status: aguardando pagamento → comprovante recebido → pago → saiu para entrega → entregue (ou cancelado). Cada mudança pode avisar o cliente no WhatsApp; cancelar devolve o estoque; entregue/cancelado devolve a conversa ao bot. |
 | **Revendedores** | Quem compra para revender. Mostra quanto cada um deve, quanto comprou no mês e as vendas (a receber / acertado). Na ficha, **Registrar acerto** marca todas as vendas a receber como pagas. As vendas entram pelo grupo (3.4.5) com o preço de revenda. Não aparece para o perfil Operador. |
-| **Estoque** | Cardápio do bot: categorias, produtos, preços, sabores/opções e estoque, com ajuste rápido (+/−, preço, ocultar). Vale na hora para o bot. Estoque vazio = não controla; zerado ou oculto some do cardápio. O pedido reserva o estoque ao ser criado. |
+| **Estoque** | Cardápio do bot: categorias, produtos, preços (padrão e, com várias lojas, por loja), sabores/opções e estoque, com ajuste rápido (+/−, preço, ocultar). Vale na hora para o bot. Estoque vazio = não controla; zerado ou oculto some do cardápio. O pedido reserva o estoque ao ser criado. |
 | **Auditoria** | Só para superusuários. Registra quem fez cada ação, quando e de qual IP: logins (inclusive senha errada), respostas e assumir/devolver conversa, edição e bloqueio de cliente, mudança de status, venda manual, ajustes de estoque/preço, produtos, categorias e configurações. Mostra o antes → depois de cada campo e tem link para o item. Também registra o que o **Bot** faz sozinho (pedido criado, comprovante recebido). Cliques seguidos no +/− do estoque viram um registro só. Os registros não podem ser editados nem apagados (no admin ficam só para leitura). |
 
 Para trocar o cardápio inteiro de uma vez (modelos, preços e sabores), edite

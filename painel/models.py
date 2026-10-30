@@ -12,8 +12,8 @@ from django.utils.text import slugify
 
 class Loja(models.Model):
     """Número de WhatsApp da operação (uma instância da Evolution). As lojas
-    dividem cardápio, estoque, equipe e configurações: muda só o número por
-    onde o cliente fala."""
+    dividem cardápio, estoque, equipe e configurações; cada uma pode ter os
+    próprios preços (`PrecoLoja`) e o próprio PDF do cardápio."""
 
     nome = models.CharField(max_length=60)
     instancia = models.CharField(
@@ -26,6 +26,10 @@ class Loja(models.Model):
     )
     ativa = models.BooleanField(
         default=True, help_text='Desativada: o bot ignora as mensagens que chegam por este número',
+    )
+    cardapio_pdf = models.FileField(
+        upload_to='cardapio/', blank=True,
+        help_text='PDF do cardápio desta loja. Vazio = o PDF de Configurações',
     )
     criado_em = models.DateTimeField(auto_now_add=True)
 
@@ -153,6 +157,27 @@ class Variante(models.Model):
         super().save(*args, **kwargs)
 
 
+class PrecoLoja(models.Model):
+    """Preço de um produto numa loja. Sem registro, vale `Produto.preco`."""
+
+    loja = models.ForeignKey(Loja, on_delete=models.CASCADE, related_name='precos')
+    produto = models.ForeignKey(Produto, on_delete=models.CASCADE, related_name='precos_loja')
+    preco = models.DecimalField(max_digits=8, decimal_places=2)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['loja', 'produto'], name='preco_unico_por_loja')]
+
+    def __str__(self):
+        return f'{self.produto.nome} na {self.loja.nome}: {self.preco}'
+
+
+def precos_da_loja(loja_id: int | None) -> dict[int, Decimal]:
+    """{produto_id: preço} dos produtos com preço próprio nesta loja."""
+    if not loja_id:
+        return {}
+    return dict(PrecoLoja.objects.filter(loja_id=loja_id).values_list('produto_id', 'preco'))
+
+
 def _slug_unico(modelo, texto: str) -> str:
     base = slugify(texto)[:50] or 'item'
     slug, n = base, 2
@@ -203,7 +228,7 @@ class Pedido(models.Model):
     origem = models.CharField(max_length=10, choices=Origem.choices, default=Origem.WHATSAPP)
     loja = models.ForeignKey(
         Loja, on_delete=models.SET_NULL, null=True, blank=True, related_name='pedidos',
-        help_text='Número por onde o pedido foi feito (vazio em vendas manuais)',
+        help_text='Número por onde o pedido foi feito, ou a loja escolhida na venda manual',
     )
     status = models.CharField(
         max_length=30, choices=Status.choices, default=Status.AGUARDANDO_PAGAMENTO, db_index=True,
@@ -287,7 +312,7 @@ class Configuracao(models.Model):
     )
     cardapio_pdf = models.FileField(
         upload_to='cardapio/', blank=True,
-        help_text='PDF do cardápio enviado ao cliente junto das boas-vindas',
+        help_text='PDF do cardápio enviado ao cliente junto das boas-vindas (lojas sem PDF próprio)',
     )
     expediente_aberto = models.BooleanField(
         default=True, help_text='Fechado: o bot só responde com a mensagem de loja fechada',

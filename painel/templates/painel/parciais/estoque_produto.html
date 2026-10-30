@@ -10,6 +10,14 @@
       <input class="in-preco" type="text" inputmode="decimal" name="preco" value="{{ p.preco|stringformat:'.2f' }}" aria-label="Preço de {{ p.nome }}"
              hx-post="{% url 'painel:estoque_ajustar' 'produto' p.pk %}" hx-trigger="change" hx-target="#produto-{{ p.pk }}" hx-swap="outerHTML">
     </td>
+    {% for loja, preco in p.precos_lojas %}
+    <td class="c-preco-loja" data-rotulo="{{ loja.nome }}: R$">
+      <input class="in-preco{% if preco is not None %} proprio{% endif %}" type="text" inputmode="decimal" name="preco_loja"
+             value="{% if preco is not None %}{{ preco|stringformat:'.2f' }}{% endif %}" placeholder="{{ p.preco|stringformat:'.2f' }}"
+             aria-label="Preço de {{ p.nome }} na {{ loja.nome }}" title="Em branco: preço padrão"
+             hx-post="{% url 'painel:estoque_ajustar' 'produto' p.pk %}" hx-vals='{"loja": "{{ loja.pk }}"}' hx-trigger="change" hx-target="#produto-{{ p.pk }}" hx-swap="outerHTML">
+    </td>
+    {% endfor %}
     <td class="c-estoque">
       {% if variantes %}
         <span class="muted peq">estoque por opção ↓</span>
@@ -27,6 +35,7 @@
   <tr class="linha-variante{% if not v.ativo %} inativo{% endif %}">
     <td class="recuo c-nome">↳ {{ v.nome }}</td>
     <td class="c-vazio"></td>
+    {% for _ in p.precos_lojas %}<td class="c-vazio"></td>{% endfor %}
     <td class="c-estoque">{% include 'painel/parciais/estoque_controle.html' with tipo='variante' obj=v minimo=p.estoque_minimo %}</td>
     <td class="c-cardapio">
       <button class="btn peq {% if not v.ativo %}perigo{% endif %}" hx-post="{% url 'painel:estoque_ajustar' 'variante' v.pk %}" hx-vals='{"alternar_ativo": "1"}' hx-target="#produto-{{ p.pk }}" hx-swap="outerHTML">{% if v.ativo %}Ativa{% else %}Oculta{% endif %}</button>
